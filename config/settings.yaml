@@ -1,0 +1,159 @@
+# config/settings.yaml — переносимые параметры EWS.
+#
+# Этот файл едет в git КАК ЕСТЬ и при переезде на лабораторную машину не правится.
+# Всё машинозависимое (абсолютные пути, url, id баз) — config/machine.local.yaml.
+# Всё секретное (токены) — config/settings.local.yaml.
+# Подобранные пороги карт — config/thresholds.<clinic>.local.yaml (генерируется
+# бэкфитом, в .gitignore: пороги привязаны к объёму и разбросу конкретной
+# лаборатории и переезжать не должны, см. docs/PORTING.md §4).
+# Если параметр приходится менять при переезде — значит, он лежит не в том файле.
+
+schema_version: "0.1"
+
+# --- Чекпойнты цикла -------------------------------------------------------
+# Тревоги существуют ТОЛЬКО на closure. T0 и fertilisation — чистая регистрация.
+checkpoints:
+  t0:
+    name: "opu"
+    offset_days: 0
+    evaluates: false          # неподвижное решение владельца: тревог нет
+    registers_envelope: true
+  t1:
+    name: "fertilisation"
+    offset_days: 1
+    evaluates: false          # неподвижное решение владельца: тревог нет
+    registers_envelope: false
+  t6:
+    name: "closure"
+    offset_days: 6            # окно культивирования Date OPU..+6
+    evaluates: true           # единственная точка оценки
+    registers_envelope: false
+
+# --- Конверт и остатки -----------------------------------------------------
+envelope:
+  stages: ["pn2", "blasts_early", "blasts_after_fert", "good", "frozen"]
+  # Перевод межквантильного размаха P10-P90 в sigma: 2 * Phi^-1(0.9).
+  iqr_to_sigma_divisor: 2.5631
+  freeze: true                # после записи не пересчитывается никогда
+
+  # Вырожденный интервал: на счётной величине полоса шириной <= 1 физически не может
+  # дать 80% покрытия — дискретность счёта превышает разрешение интервала. Измерено
+  # на 5205 наблюдениях 4 клиник (scripts/ews_baseline.py, 2026-08-13): таких 12.1%,
+  # покрытие в них 0.414 против 0.812 у остальных. Это ограничение интервала, НЕ
+  # сигнал лаборатории — стадия помечается envelope_degenerate и в слой остатков не идёт.
+  min_interval_width: 1.0
+
+  # Риск-коррекция карт по конверту (p_i = P50/знаменатель вместо общей p0).
+  # ВЫКЛЮЧЕНА по измерению, а не из осторожности: прямая подстановка P50 ухудшила
+  # разнородность втрое-впятеро (X2/df 2.33 -> 11.92 у MIIR, 2.76 -> 14.48 у BlR).
+  # Причина не в качестве прогноза (P50 согласован с фактом: корреляция 0.86-0.97),
+  # а в подстановке ТОЧЕЧНОЙ оценки как ИЗВЕСТНОЙ вероятности: у mii 49% циклов
+  # дают p_i >= 0.95, где биномиальная дисперсия вырождается и один промах весит
+  # как двадцать обычных. Включать только после того, как p_i начнёт учитывать
+  # ширину P10-P90. Подробно — docs/METHODOLOGY.md §5.8.
+  risk_adjustment_enabled: false
+
+  # Опорное покрытие — ИЗМЕРЕННОЕ, не номинальные 0.80. Сравнение с номиналом дало бы
+  # постоянный ложный сигнал там, где интервал просто шире или уже нужного.
+  # Пересчитывается scripts/ews_baseline.py; значения ниже — прогон 2026-08-13.
+  baseline_coverage_measured_at: "2026-08-13"
+  baseline_coverage:
+    overall: 0.812
+    mii: 0.794
+    pn2: 0.759
+    blasts: 0.823
+    good: 0.878
+    frozen: 0.950
+
+# --- Карты -----------------------------------------------------------------
+charts:
+  cusum:
+    odds_ratio_deterioration: 0.5   # нижний контроль: половинные шансы успеха
+    odds_ratio_upper_control: 2.0   # верхний контроль (DegR, 3pNR)
+    p_clip: [0.01, 0.99]
+    unit: "embryo"
+    state_file: "data/state/ews_charts_state.json"
+  ewma:
+    lambda: 0.2
+    # L подбирается бэкфитом под ту же цель, что и CUSUM; НЕ литературное значение.
+    L: null
+    sigma_source: "reference_window"   # не теоретическая 1
+  coverage:
+    window_cycles: 40
+    alpha: 0.01
+    one_sided: "below"
+    # Сравнение идёт с envelope.baseline_coverage соответствующей стадии,
+    # а НЕ с номинальными 0.80 — см. комментарий там же.
+    compare_against: "measured_baseline"
+  funnel:
+    inner_limit: 0.95
+    outer_limit: 0.998
+    groups: ["embryologist", "media_lot", "month"]
+
+# --- Опорное окно, набор карт, колонки ------------------------------------
+# Переехали в профиль лаборатории: config/clinics/<code>/clinic.yaml и columns.yaml.
+# Здесь остаётся только МЕТОД — он одинаков для всех клиник и при заведении новой
+# лаборатории не правится. См. docs/RUNBOOK.md.
+
+# --- Целевые частоты ложных тревог -----------------------------------------
+# Решение принято сверху вниз, от цены ошибки. Обоснование — docs/METHODOLOGY.md §5.
+# Сами пороги h НЕ здесь: обратную задачу решает scripts/ews_backfit.py и пишет
+# результат в config/thresholds.<clinic>.local.yaml (гейт alert закрыт без него).
+thresholds:
+  target_false_alarms_per_year:
+    watch: 24                 # <= 2 в месяц по системе целиком
+    alert: 2                  # <= 1 на 6 месяцев по системе целиком
+  joint_across_charts: true   # цели совместные; новая карта ужесточает h остальных
+
+# --- Подтверждение и эскалация ---------------------------------------------
+corroboration:
+  # Ранг источника. Только strong годится для быстрого маршрута watch -> alert.
+  strong: ["miri_episode", "lot_change"]
+  moderate: ["other_metric_same_contour", "ozema_flag"]
+  # CUSUM+EWMA на одной метрике — НЕ подтверждение: карты питаются одним рядом.
+  not_corroboration: ["same_metric_other_chart"]
+  window_days: 30
+
+# --- Локализация причины ---------------------------------------------------
+localisation:
+  contours:
+    doctor: ["OCCR", "MIIR"]
+    embryologist: ["FR", "DegR", "3pNR"]
+    culture: ["ClR", "BlR", "TGBDR"]
+
+  # Какие метрики получают секвенциальную карту — в профиле клиники
+  # (config/clinics/<code>/clinic.yaml: charts.cusum), потому что это зависит
+  # от объёма конкретной лаборатории.
+
+  coverage_drop_blocks_escalation: true
+  casemix_check:
+    features: ["age", "amh", "afc", "attempt_no", "sperm_source"]
+    reference_window_cycles: 200
+    ks_alpha: 0.01
+
+# --- Мягкие шаги (сбой не блокирует прогон) --------------------------------
+soft_steps:
+  miri:
+    enabled: true             # локальные недельные выгрузки подключены
+    weekly_dump: true         # ретроспективно, не поток
+    cultivation_window_days: 6
+    status_values: ["pending", "unavailable", "enriched"]
+  lots:
+    enabled: true             # Airtable, реальные даты начала/конца использования
+    ambiguous_overlap: "unresolved"   # два лота одной позиции сразу -> не угадывать
+  consensus_rag:
+    enabled: true
+
+# --- Приватность -----------------------------------------------------------
+privacy:
+  secret_file: "data/local_private/cycle_uid.key"
+  crosswalk_file: "data/local_private/cycle_uid_crosswalk.csv"
+  agent_packet_dir: "data/agent_packets"
+
+# --- Выход -----------------------------------------------------------------
+output:
+  alerts_csv: "data/ews_alerts.csv"
+  checkpoints_csv: "data/ews_checkpoints.csv"
+  panel_html: "data/EWS_Panel.html"
+  run_manifest: "data/run_manifest.json"
+  stamp_environment: true     # артефакт черновика обязан нести environment=draft

@@ -1,0 +1,17 @@
+# config/settings.local.yaml.example
+#
+# Скопируйте в config/settings.local.yaml и заполните. Настоящий файл в .gitignore.
+# ЗДЕСЬ И ТОЛЬКО ЗДЕСЬ — секреты. Ни в machine.local.yaml, ни в settings.yaml, ни в коде.
+# Значения отсюда никогда не печатаются в логи, отчёты, карточки тревог и чат.
+
+teable:
+  token: ""            # Personal Access Token локального Teable
+
+airtable:
+  token: ""            # Airtable PAT для базы расходников/лотов
+
+# Гейты, зависящие от наличия секретов выше. Держите false, пока токен не заполнен —
+# соответствующий шаг мягко пропустится, а не упадёт посреди прогона.
+enabled:
+  teable: false
+  airtable: false

@@ -1,0 +1,33 @@
+# external/tabpfn/requirements.txt — окружение внешней модели TabPFN-3 regression.
+#
+# Версии сняты с РАБОТАЮЩЕГО окружения (черновой стенд, 2026-08-13) и закреплены
+# точно: TabPFN чувствителен к версии torch, а «поставим посвежее» — это способ
+# получить другой прогноз на тех же данных и не заметить этого.
+#
+# Python 3.10 и новее (проверено на 3.11.5 и 3.12.4). Пакеты объявляют
+# requires-python: tabpfn >=3.10, torch >=3.9 — отдельный интерпретатор искать не
+# нужно, подходит системный.
+#
+# Ставить в ОТДЕЛЬНЫЙ venv, не в окружение самого EWS. Разделение сохраняется даже
+# при одинаковой версии Python: у EWS нет и не должно быть зависимости от torch —
+# это 1.7 ГБ в окружении, которое их не использует.
+#
+#   python -m venv external/tabpfn/.venv
+#   external/tabpfn/.venv/Scripts/python.exe -m pip install -r external/tabpfn/requirements.txt
+#
+# torch ставится CPU-сборкой: GPU здесь не нужен (N_ESTIMATORS=1, DEVICE="cpu"),
+# а CUDA-колёса тянут несколько гигабайт.
+#   --index-url https://download.pytorch.org/whl/cpu
+
+tabpfn==8.0.8
+torch==2.7.0
+numpy==2.4.6
+pandas==2.3.3
+scikit-learn==1.9.0
+scipy==1.17.1
+openpyxl==3.2.0b1
+huggingface_hub==1.20.1
+joblib==1.5.3
+einops==0.8.2
+pydantic==2.13.4
+pydantic-settings==2.14.1

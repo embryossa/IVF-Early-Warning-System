@@ -1,0 +1,100 @@
+# config/consensus/vienna.yaml
+#
+# ЗДЕСЬ НЕТ ЧИСЕЛ. Пороги Венского консенсуса живут в embryo.kpi.KPI_SPECS и
+# импортируются оттуда — дублировать их здесь запрещено (правила проекта).
+# Этот файл связывает индикатор с ТЕКСТОМ рекомендации и цитатой для карточки тревоги:
+# что консенсус велит проверить, когда индикатор ушёл из-под контроля.
+#
+# Поле `verbatim` заполняется при сборке корпуса RAG чтением PDF из
+# machine.local.yaml: consensus.pdf_dir. Пока status: to_extract — карточка тревоги
+# показывает только ссылку на документ, без цитаты. Придумывать цитату запрещено.
+
+source:
+  key: "Vienna2017"
+  citation: >
+    ESHRE Special Interest Group of Embryology and Alpha Scientists in Reproductive
+    Medicine. The Vienna consensus: report of an expert meeting on the development of
+    ART laboratory performance indicators. Reprod Biomed Online 2017;35(5):494-510.
+    PMID 28784335.
+  pdf: "The Vienna consenus_Lab KPI.pdf"
+
+indicators:
+  OCCR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['OCCR']"
+    contour: doctor
+    on_signal_check:
+      - "техника аспирации и промывания фолликулов"
+      - "интервал триггер → пункция"
+      - "давление аспирации, состояние игл и системы"
+    verbatim: null
+    page: null
+    status: to_extract
+  MIIR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['MIIR']"
+    contour: doctor
+    on_signal_check:
+      - "выбор и доза триггера, интервал до пункции"
+      - "критерии оценки зрелости при денудации, время денудации"
+    verbatim: null
+    page: null
+    status: to_extract
+  FR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['FR']"
+    contour: embryologist
+    on_signal_check:
+      - "техника ICSI конкретного оператора, обездвиживание сперматозоида"
+      - "качество и подготовка спермы"
+      - "время от денудации до инъекции, температура рабочей поверхности"
+      - "тайминг проверки оплодотворения (окно визуализации пронуклеусов)"
+    verbatim: null
+    page: null
+    status: to_extract
+  DegR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['DegR']"
+    contour: embryologist
+    on_signal_check:
+      - "механическое повреждение при денудации и инъекции"
+      - "концентрация и время экспозиции гиалуронидазы"
+      - "калибровка и состояние микроинструментов"
+    verbatim: null
+    page: null
+    status: to_extract
+  3pNR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['3pNR']"
+    contour: embryologist
+    on_signal_check:
+      - "оценка зрелости ооцита перед инъекцией"
+      - "тайминг оценки пронуклеусов"
+    verbatim: null
+    page: null
+    status: to_extract
+  ClR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['ClR']"
+    contour: culture
+    on_signal_check:
+      - "тайминг оценки оплодотворения (ClR>100% — про окно проверки, не про подсчёт)"
+      - "стабильность инкубации в первые сутки"
+    verbatim: null
+    page: null
+    status: to_extract
+  BlR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['BlR']"
+    contour: culture
+    on_signal_check:
+      - "партия среды: номер лота, срок, условия хранения и транспортировки"
+      - "инкубатор: температура, CO2/pH, O2, восстановление после открытия"
+      - "качество воздуха и VOC (см. cairo.yaml)"
+      - "масло, чашки, пластик — смена партии в окне культивирования"
+      - "объём капли, плотность посадки, схема смены среды"
+    verbatim: null
+    page: null
+    status: to_extract
+  TGBDR:
+    thresholds_from: "embryo.kpi.KPI_SPECS['TGBDR']"
+    contour: culture
+    on_signal_check:
+      - "то же, что BlR — но знаменатель 2pN, НЕ число бластоцист"
+      - "критерии оценки качества бластоцисты, согласованность между оценщиками"
+    verbatim: null
+    page: null
+    status: to_extract

@@ -1,0 +1,90 @@
+# config/clinics/<code>/columns.yaml — ШАБЛОН соответствия колонок.
+#
+# Единственное место, где имена колонок мастер-таблицы этой лаборатории
+# превращаются в канонические. Неизвестное имя НЕ угадывается: если колонки нет,
+# метрика, которой она нужна, помечается недоступной, а не считается по
+# подвернувшемуся столбцу.
+#
+# Имена берите РОВНО как в выгрузке, включая висячие пробелы и регистр.
+# Проверить соответствие до первого прогона: python scripts/ews_check_columns.py --clinic <code>
+
+# Канонические имена слева совпадают с embryo-lab-data, чтобы модули kpi/ozema/
+# regression_qc принимали кадр без переходников. Слева НЕ переименовывать.
+canonical:
+  age: ""
+  attempt_no: ""
+  follicles: ""               # число фолликулов на пункции
+  afc: ""                     # базовый КАФ; != follicles
+  occ: ""                     # число ОКК
+  mii: ""
+  inseminated: ""
+  two_pn: ""
+  three_pn: ""
+  one_pn: ""
+  zero_pn: ""
+  degrade: ""
+  cleavage_d3: ""
+  bl_total: ""                # именно бластоцисты; != общее число эмбрионов D5
+  bl_good: ""
+  frozen: ""
+  transferred: ""
+  transfer_day: ""
+  transfer_outcome: ""
+  fertilization_method: ""
+  sperm_source: ""
+  embryologist: ""
+  doctor: ""
+  patient_id: ""
+  patient_name: ""
+  dob: ""
+  date_opu: ""
+  date_et: ""
+  amh: ""
+  bmi: ""
+  fsh: ""
+  # Итоговые вероятности ансамбля Digital Twin, если они есть в выгрузке.
+  # Нужны медленному контуру подтверждения по исходу; пусто -> контур пропускается.
+  prai: ""
+  digital_twin: ""
+
+# Числовые колонки и точность. Всё, чего здесь нет, читается как текст.
+# Пустая ячейка -> пропуск, НЕ ноль: ноль здесь известное наблюдение.
+numeric:
+  age: 0
+  attempt_no: 0
+  follicles: 0
+  afc: 0
+  occ: 0
+  mii: 0
+  inseminated: 0
+  two_pn: 0
+  three_pn: 0
+  one_pn: 0
+  zero_pn: 0
+  degrade: 0
+  cleavage_d3: 0
+  bl_total: 0
+  bl_good: 0
+  frozen: 0
+  transferred: 0
+  transfer_day: 0
+  amh: 2
+  bmi: 1
+  fsh: 2
+  prai: 3
+  digital_twin: 3
+
+dates: ["date_opu", "date_et"]
+date_formats: ["%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"]
+decimal_comma: true           # запятая как десятичный разделитель в выгрузке
+
+# Ключ цикла: составной. У повторных попыток одной пациентки общий паспортный ID,
+# и join по нему схлопнул бы разные циклы в один.
+cycle_key: ["patient_id", "date_opu_raw"]
+
+checkpoint_fields:
+  fertilisation: ["two_pn", "three_pn", "one_pn", "zero_pn", "degrade"]
+  closure: ["cleavage_d3", "bl_total", "bl_good", "frozen"]
+
+# PHI: остаётся локально, никогда не уходит в агентский пакет и в панель.
+phi: ["patient_id", "patient_name", "dob"]

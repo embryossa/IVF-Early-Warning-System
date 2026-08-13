@@ -1,0 +1,64 @@
+# config/consensus/cairo.yaml
+#
+# Каирский консенсус — среда лаборатории ЭКО: качество воздуха, VOC, температура,
+# pH/CO2, материалы. Это ЕДИНСТВЕННЫЙ источник порогов, которых нет в
+# embryo.kpi.KPI_SPECS, поэтому здесь числа допустимы — но только извлечённые из PDF
+# с указанием страницы.
+#
+# ВАЖНО: файл намеренно оставлен незаполненным (status: to_extract). Значения
+# вписываются при сборке корпуса RAG чтением PDF из machine.local.yaml:
+# consensus.pdf_dir, каждое — с номером страницы. Вписывать значения по памяти
+# запрещено: карточка тревоги с выдуманным порогом хуже, чем карточка без порога.
+
+source:
+  key: "Cairo2020"
+  citation: >
+    ESHRE Guideline Group / Alpha Scientists in Reproductive Medicine. The Cairo
+    consensus on the IVF laboratory environment and air quality: report of an expert
+    meeting. Reprod Biomed Online (см. PDF в consensus.pdf_dir — точные выходные
+    данные и год сверить при извлечении).
+  pdf: "Cairo consensus on the IVF laboratory.pdf"
+
+# Роль в EWS: не карта и не источник тревоги. Это чек-лист того, что консенсус велит
+# проверить, когда сработал контур культивирования, плюс справочные пределы среды для
+# сопоставления с эпизодами MIRI.
+role: "explanatory_checklist"
+
+parameters:
+  temperature:
+    unit: "°C"
+    setpoint: null
+    tolerance: null
+    page: null
+    status: to_extract
+  co2_ph:
+    unit: "pH"
+    target: null
+    tolerance: null
+    page: null
+    status: to_extract
+  oxygen:
+    unit: "%"
+    target: null
+    tolerance: null
+    page: null
+    status: to_extract
+  voc_total:
+    unit: null
+    limit: null
+    page: null
+    status: to_extract
+  particulate:
+    unit: null
+    class: null
+    page: null
+    status: to_extract
+
+on_culture_contour_signal:
+  # Порядок разбора, который карточка тревоги предлагает эмбриологу.
+  - "смена партии среды/масла/пластика в окне культивирования (Airtable, lot_change)"
+  - "эпизоды инкубатора в окне: температура, CO2, O2, длительность открытия, время восстановления"
+  - "недавние работы в помещении, новая мебель/материалы, ремонт, замена фильтров"
+  - "смена баллонов газа, состояние линии и редукторов"
+  - "график и качество обслуживания системы вентиляции и фильтрации"
+  - "изменения в протоколе: объём капель, схема смены среды, плотность посадки"

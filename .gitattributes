@@ -1,0 +1,5 @@
+# Окончания строк фиксированы, чтобы diff не шумел при работе с двух машин.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ckpt binary
+*.xlsx binary

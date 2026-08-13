@@ -1,0 +1,76 @@
+# config/machine.local.yaml.example
+#
+# Скопируйте в config/machine.local.yaml и заполните под конкретную машину.
+# Настоящий файл в .gitignore. ЭТО ЕДИНСТВЕННОЕ МЕСТО, где живут абсолютные пути.
+# Перенос проекта на лабораторную машину = правка только этого файла.
+# Чек-лист переноса — docs/PORTING.md.
+
+# draft      — стенд на учебных/устаревших данных: уровень alert НЕ поднимается.
+# production — боевые данные клиники.
+#
+# ВАЖНО: это про ДАННЫЕ, а не про машину. Если дома и на работе одна и та же
+# клиника с одной и той же выгрузкой, окружение боевое на обеих машинах, и пороги
+# между ними переносятся законно. Различие машин — в `site` ниже.
+environment: draft
+
+# Площадка: где физически идёт прогон. Влияет на происхождение артефакта и на то,
+# каких источников ждать (свежие логи инкубатора обычно есть только в лаборатории).
+# На уровень тревог не влияет.
+site: ""                     # home | lab
+
+paths:
+  # Куда EWS пишет свои данные. Относительный путь считается от корня проекта.
+  data_dir: "data"
+
+embryo_lab_data:
+  # Источник импортируемых модулей (kpi, incubator, ozema, lots, regression_qc,
+  # ingest, contracts, privacy, _io). Ставится через `pip install -e <project_dir>`,
+  # НЕ копируется в этот проект.
+  project_dir: ""            # напр. C:/.../embryo-lab-data
+  clinic: "two_line"         # какой набор config/clinics/<clinic>/ использовать
+
+digital_twin:
+  enabled: true
+  project_dir: ""            # проект с RUN_BATCH.bat
+  run_cmd: 'RUN_BATCH.bat {input}'
+  results_dir: ""
+
+tabpfn_regression:
+  # TabPFN-3: количественный прогноз стадий воронки — источник конверта P10-P90.
+  # Модель ВЕНДОРЕНА в external/tabpfn: на лабораторной машине TabPFN отдельно не
+  # установлен, и единица переноса — папка проекта целиком, а не `git clone`.
+  # Пути относительные и при переезде НЕ правятся; заполнить надо только dev_cohort.
+  enabled: true
+  vendored: true
+  project_dir: "external/tabpfn"
+  python: "external/tabpfn/.venv/Scripts/python.exe"
+  script: "tabpfn3_ivf_regression_report_CPU_16K.py"
+  model_cache_dir: "external/tabpfn/models"
+  # Обучающая когорта (данные пациенток). Путь на ЭТОЙ машине; скрипт
+  # ews_setup_tabpfn.py --vendor-from скопирует её в local_private.
+  dev_cohort: ""
+
+teable:
+  # Локальный self-hosted Teable, куда мастер-таблица OPU синхронизируется раз в сутки.
+  url: "http://127.0.0.1:3000"
+  base_id: ""                # база OPU-мастера (создаётся в фазе 0)
+  opu_table_id: ""
+  # token -> config/settings.local.yaml, НЕ сюда
+
+airtable:
+  # Расходники и лоты среды: реальные даты начала и конца использования.
+  base_id: ""
+  items_table_id: ""
+  changes_table_id: ""
+  # token -> config/settings.local.yaml, НЕ сюда
+
+miri_logs:
+  # Недельная выгрузка логов инкубатора. На черновом стенде её нет — оставьте пустым
+  # и держите soft_steps.miri.enabled: false в settings.yaml.
+  dump_dir: ""               # напр. .../miri_logs/6391
+  incubator: "6391"
+
+consensus:
+  # Каталог PDF консенсусов для сборки корпуса RAG (Vienna, Cairo, Maribor, Alpha,
+  # Istanbul, Delphi, KPIs-score).
+  pdf_dir: ""

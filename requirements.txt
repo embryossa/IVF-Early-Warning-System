@@ -1,0 +1,8 @@
+pandas>=2.0
+numpy>=1.26
+pyyaml>=6.0
+requests>=2.31
+scipy>=1.11
+python-calamine>=0.2      # быстрый путь чтения Excel; без него молчаливый откат на openpyxl
+openpyxl>=3.1
+pytest>=8.0

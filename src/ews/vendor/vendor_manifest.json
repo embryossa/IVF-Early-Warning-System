@@ -1,0 +1,13 @@
+{
+  "source": "C:\\Users\\User\\Desktop\\IVF\\AI\\embryo-lab-data",
+  "synced_at": "2026-08-13",
+  "note": "копии, не форк: править только в источнике",
+  "files": {
+    "kpi.py": "47739f1237f84fc7",
+    "privacy.py": "78a7f505611bb76c",
+    "incubator.py": "66ee0d2eadc70835",
+    "lots.py": "a217d2f7f85126cb",
+    "_io.py": "71e024d22b873aef",
+    "teable_client_impl.py": "21286b3f1f141d50"
+  }
+}
