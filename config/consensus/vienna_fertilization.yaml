@@ -1,0 +1,39 @@
+# config/consensus/vienna_fertilization.yaml
+#
+# Пороги нормального оплодотворения ПО МЕТОДУ (IVF / ICSI) для демо-панели на
+# выгрузках других лабораторий. Правило проекта: порог приходит только из
+# embryo.kpi.KPI_SPECS или config/consensus/*.yaml, а в *.yaml кладутся лишь те
+# пороги, которых в kpi.py нет. В KPI_SPECS есть один FR — для all-ICSI процесса
+# лаборатории Two-Line с локальным бенчмарком 0.75 (решение владельца). Порогов,
+# раздельных по методу, там нет; они нужны, когда в чужой выгрузке смешаны IVF и
+# ICSI. Поэтому они здесь, а не в kpi.py, и общий FR по-прежнему берётся из
+# KPI_SPECS без изменений.
+#
+# Источник: ESHRE SIG Embryology & Alpha Scientists. The Vienna consensus: report of
+# an expert meeting on the development of ART laboratory performance indicators.
+# Reprod Biomed Online 2017;35(5):494-510 (Table: fertilization KPIs).
+# Знаменатели — как в консенсусе: ICSI — инъецированные MII; IVF — инсеминированные
+# ОКК. Смешанный цикл IVF+ICSI отдельного порога в консенсусе не имеет — показывается
+# без порога.
+
+source:
+  key: "Vienna2017"
+  citation: "Reprod Biomed Online 2017;35(5):494-510. PMID 28784335."
+
+fertilization_by_method:
+  ICSI:
+    label: "ICSI: нормальное оплодотворение (2PN / инъецированные MII)"
+    denominator: "mii_injected"
+    direction: lower
+    competency: 0.65
+    benchmark: 0.80
+    indicator_class: "Vienna KPI"
+    source_note: "Vienna 2017, ICSI normal fertilization rate: competency ≥65%, benchmark ≥80%"
+  IVF:
+    label: "IVF: нормальное оплодотворение (2PN / инсеминированные ОКК)"
+    denominator: "coc_inseminated"
+    direction: lower
+    competency: 0.60
+    benchmark: 0.75
+    indicator_class: "Vienna KPI"
+    source_note: "Vienna 2017, IVF normal fertilization rate: competency ≥60%, benchmark ≥75%"

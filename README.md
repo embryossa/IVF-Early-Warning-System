@@ -111,6 +111,27 @@ python scripts/ews_run.py       --clinic <code> --replay   # ретроспек�
 python scripts/ews_schedule.py  --clinic <code> --install  # расписание Windows
 ```
 
+## Демо-панель на выгрузке другой лаборатории
+
+Для демонстрации на чужих данных (Excel/CSV только с данными циклов — без логов
+инкубатора, лотов и прогонов Digital Twin/TabPFN) — команда `/ews-demo <файл>` в Claude
+Code (скилл `ews-demo-dashboard`) или напрямую:
+
+```bash
+python scripts/ews_demo.py --input <файл.xlsx|csv> --check-columns   # сопоставление колонок
+python scripts/ews_demo.py --input <файл> [--columns override.yaml]  # панель
+python scripts/ews_demo_synth.py                                      # синтетический пример
+```
+
+Колонки сопоставляются только по точным синонимам из `config/demo/column_aliases.yaml`
+(неоднозначное не угадывается), идентификаторы превращаются в `cycle_uid` и удаляются на
+входе, имена специалистов заменяются псевдонимами. Панель — автономный HTML
+`data/demo/<slug>/EWS_Demo_<slug>.html` в стиле рисунков публикации: KPI против порогов
+Венского консенсуса, скользящие доли с ДИ, p-карта Шухарта/Laney, EWMA, CUSUM,
+violin по эмбриологам с funnel plot, FR по методу с ECDF, факторы TGBDR, тесты различий
+по месяцам и специалистам с выбором метода под сверхдисперсию. Демо всегда
+`environment=draft`, `mode=demo` и не поднимает `alert`.
+
 ## Новая лаборатория
 
 Метод (математика карт, целевые частоты, правила чекпойнтов) один на всех и лежит в

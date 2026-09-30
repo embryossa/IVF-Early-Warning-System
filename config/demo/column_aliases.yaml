@@ -1,0 +1,100 @@
+# config/demo/column_aliases.yaml — словарь синонимов колонок для ДЕМО-прогона
+# на выгрузках других лабораторий (scripts/ews_demo.py, скилл /ews-demo).
+#
+# Как это согласуется с правилом «неизвестные имена не угадывать»:
+#   * сопоставление — ТОЛЬКО точное совпадение нормализованного имени с одним из
+#     перечисленных здесь синонимов (нормализация: регистр, ё→е, пробелы, знаки
+#     препинания). Никакого нечёткого поиска, подстрок и «похоже на»;
+#   * если под одну каноническую колонку подошли две колонки файла — она НЕ
+#     сопоставляется, прогон печатает конфликт и просит явный override;
+#   * всё несопоставленное перечисляется в отчёте о колонках, метрика без нужной
+#     колонки помечается недоступной, а не считается по подвернувшемуся столбцу.
+# Явный override для конкретного файла: --columns <yaml> с секцией `canonical:`
+# (имя колонки РОВНО как в файле) — он имеет приоритет над словарём.
+#
+# Синонимы собраны из профилей реальных клиник embryo-lab-data (two_line,
+# fertimed, ggrc, skyfert, benchmark). Добавлять новые — сюда, с проверкой, что
+# синоним однозначен.
+
+canonical:
+  # --- идентификаторы (PHI): используются ТОЛЬКО для cycle_uid и сразу удаляются
+  patient_id:   ["ID", "patient_id", "Номер карты пациента", "Номер карты", "ЭМК", "OPU Code",
+                 "Patient ID", "Cycle ID", "MRN", "record_id"]
+  patient_name: ["Patient Full Name", "ФИО", "ФИО пациента", "Patients name", "Patient name",
+                 "patient_name", "Full name"]
+  dob:          ["DOB", "Дата рождения", "Date of birth", "birth_date"]
+
+  # --- даты и операторы
+  date_opu:     ["Date OPU", "Дата пункции", "Дата ОПУ", "OPU Date", "OPU date", "date_opu",
+                 "Retrieval date", "Дата забора ооцитов"]
+  embryologist: ["Embryologist", "Эмбриолог", "Эмбриолог, проводивший оплодотворение",
+                 "Embryologist IVF/ICSI", "embryologist", "Эмбриолог оплодотворения",
+                 "Fertilization embryologist"]
+  doctor:       ["Doctor", "Врач", "Врач на пункции", "doctor", "OPU doctor", "Physician"]
+
+  # --- метод оплодотворения: одна колонка со значением ИЛИ флаги по методам
+  fertilization_method: ["IVF/ICSI", "Fertilization Method", "Fertilization method",
+                         "Метод оплодотворения", "Метод", "fertilization_method", "Method"]
+  ivf_flag:     ["IVF"]
+  icsi_flag:    ["ICSI"]
+  treatment_type: ["Лечение", "Treatment", "Treatment type", "Тип лечения"]
+  sperm_source: ["sperm", "Sperm", "Sperm Source", "sperm_source", "Источник спермы"]
+  termination_reason: ["Причина завершения программы ВРТ", "Termination reason"]
+
+  # --- пациентка
+  age:          ["Age", "Возраст", "age", "Возраст пациентки", "Female age"]
+  attempt_no:   ["# Attempt", "№ попытки", "Attempt", "Attempts", "attempt", "attempt_number",
+                 "Номер попытки"]
+  amh:          ["AMH", "АМГ", "amh"]
+  afc:          ["Antral follicule count", "Antral follicle count", "AFC", "КАФ", "afc"]
+  bmi:          ["BMI", "ИМТ", "bmi"]
+  fsh:          ["FSH", "ФСГ", "fsh"]
+
+  # --- воронка цикла
+  follicles:    ["N folicules OPU", "N follicles OPU", "Количество фолликулов", "follicles",
+                 "Follicles", "Число фолликулов"]
+  occ:          ["OCC", "Число ОКК", "Oocytes N", "okk", "ОКК", "COC", "Oocytes retrieved",
+                 "Количество ОКК"]
+  mii:          ["MII", "Число MII", "mii", "MII oocytes", "Зрелые MII"]
+  inseminated:  ["Inseminated", "Число инсеминированных", "number of inseminated oocytes",
+                 "Inseminated oocytes", "Инсеминировано"]
+  two_pn:       ["2pN", "2 pN", "2PN", "pn2", "2 PN", "Число 2pN", "2PN zygotes"]
+  three_pn:     ["3pN", "3 pN", "3pN or more", "3PN", "Число 3pN"]
+  one_pn:       ["1pN", "1 pN", "1PN"]
+  zero_pn:      ["0pN", "0 pN", "0PN"]
+  degrade:      ["Deg", "Degrade", "Degenerated", "Дегенерировавшие", "Дегенерация"]
+  cleavage_d3:  ["Cleavage", "Число дробящихся на 3 день", "number of embryos dividing on day 3",
+                 "Cleavage D3", "Дробление"]
+  bl_total:     ["Bl", "Число Bl", "D5-D6-D7", "CombinedDays", "Blastocysts", "Число бластоцист"]
+  bl_good:      ["Good Bl", "Число Bl хор.кач-ва", "Good quality BL", "Good blastocysts",
+                 "Число бластоцист хорошего качества"]
+  frozen:       ["Cryo", "Заморожено эмбрионов", "Frozen", "Vitrified embryos"]
+  transferred:  ["ET", "Перенесено эмбрионов", "Embryos transferred", "Number of transfered embryos"]
+
+# Какие значения колонок-флагов (ivf_flag / icsi_flag) означают «метод применён».
+flag_true_tokens: ["да", "yes", "y", "1", "+", "true", "x", "v", "✓"]
+
+# Нормализация значения колонки метода. Сравнение — по нормализованному значению
+# целиком; если в значении есть и IVF-токен, и ICSI-токен — это смешанный цикл.
+method_tokens:
+  icsi: ["icsi", "икси", "imsi", "picsi"]
+  ivf:  ["ivf", "эко", "cIVF", "conventional ivf", "c-ivf"]
+
+# Исключения из популяции таблиц компетентности (как kpi.competency_exclusion_mask).
+competency_exclusion:
+  no_retrieval_tokens: ["NO", "нет", "no retrieval", "без ооцитов"]
+  freeze_all_tokens: ["Cryo", "крио", "freeze-all", "freeze all"]
+  surgical_sperm_tokens: ["TESE", "SMF", "MESA", "PESA", "microTESE", "mTESE"]
+  embryologist_only_treatment_tokens: ["Только пункция"]
+
+# Правдоподобие строки. Строка «Итого» под таблицей или счётчик в сотни ооцитов на
+# цикл — не наблюдение, а итог/ошибка ввода: исключается и печатается в разделе данных.
+# (ClR>100% и MII>OCC сюда НЕ относятся — это наблюдения и остаются.)
+plausibility:
+  max_count_per_cycle: 100
+  summary_row_pattern: "^\\s*(?:итого|всего|total|sum|сумма)\\b"
+
+# Строки, чьи счётчики воронки не относятся к этой строке (перенесены из исходной
+# пункции) — в сумму KPI не идут никогда (как kpi.funnel_exclusion_mask).
+funnel_exclusion:
+  stale_funnel_tokens: ["Криоперенос", "Инсеминация", "FET"]
