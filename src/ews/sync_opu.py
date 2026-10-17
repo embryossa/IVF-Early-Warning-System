@@ -125,6 +125,10 @@ def row_to_fields(row: pd.Series, cycle_uid: str, environment: str,
                   today: datetime | None = None) -> dict:
     fields: dict[str, object] = {}
     for sheet_name, field_name in SHEET_TO_FIELD.items():
+        if sheet_name not in row.index:
+            # Колонки нет в выгрузке вовсе — значение неизвестно, а не пусто.
+            # Поле не попадает в запись, и Teable сохраняет то, что в нём было.
+            continue
         raw = row.get(sheet_name)
         if field_name in DATE_FIELDS:
             value = _to_date(raw)
@@ -154,6 +158,43 @@ def content_hash(fields: dict) -> str:
         if name not in ignored
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def dt_probabilities(cfg: Config, client) -> dict[tuple[str, str], dict] | None:
+    """Вероятности из базы Digital Twin в Teable, по (ID, дата OPU).
+
+    Колонка DIGITAL TWIN из листа удалена: источник вероятности — сама база DT
+    (таблица Cycles, последний прогон); какие поля берутся — `sync.dt_teable.fields`. `ID пациента` там составной (`ID#…`),
+    сопоставляется часть до `#`. Дата хранится как полночь пояса, в котором писала
+    база DT, поэтому UTC-метку сдвигаем на `date_utc_offset_hours`, а не берём дату
+    из UTC напрямую — иначе каждый цикл уезжает на день назад.
+
+    None — источник не настроен; тогда поля DT синхронизация не трогает.
+    """
+    source = cfg.settings.get("sync", {}).get("dt_teable")
+    table_id = str(cfg.external("teable").get("dt_cycles_table_id") or "").strip()
+    if not source or not table_id:
+        return None
+    id_field, date_field = source["id_field"], source["date_field"]
+    mapping: dict[str, str] = source["fields"]
+    offset = timedelta(hours=float(source["date_utc_offset_hours"]))
+
+    index: dict[tuple[str, str], dict] = {}
+    for record in client.all_records(table_id, projection=[id_field, date_field, *mapping]):
+        values = record["fields"]
+        patient = _clean(values.get(id_field)).upper().replace(" ", "").split(KEY_SEPARATOR)[0]
+        stamp = _clean(values.get(date_field))
+        if not patient or not stamp:
+            continue
+        local = datetime.fromisoformat(stamp.replace("Z", "+00:00")) + offset
+        index[(patient, local.date().isoformat())] = {
+            target: _to_number(values.get(name)) for name, target in mapping.items()}
+    return index
+
+
+def _dt_key(row: pd.Series) -> tuple[str, str]:
+    return (_clean(row.get("ID")).upper().replace(" ", ""),
+            _to_date(row.get("Date OPU")) or "")
 
 
 def load_sheet_export(path: str | Path) -> pd.DataFrame:
@@ -189,6 +230,10 @@ def sync(cfg: Config, client, table_ids: dict[str, str], frame: pd.DataFrame,
         if key:
             existing[key] = (record["id"], _clean(record["fields"].get("Хеш строки")))
 
+    dt_index = dt_probabilities(cfg, client)
+    dt_targets = list(cfg.settings["sync"]["dt_teable"]["fields"].values()) if dt_index is not None else []
+    dt_matched = 0
+
     to_create: list[dict] = []
     to_update: list[tuple[str, dict]] = []
     seen_keys: set[str] = set()
@@ -208,6 +253,13 @@ def sync(cfg: Config, client, table_ids: dict[str, str], frame: pd.DataFrame,
         seen_keys.add(key)
 
         fields = row_to_fields(row, make_cycle_uid(key, secret), cfg.environment)
+        if dt_index is not None:
+            # Цикла нет в базе DT или прогноз пуст — поле пустое (неизвестно), а не
+            # прежнее значение листа: смешивать версии модели в одной колонке нельзя.
+            probabilities = dt_index.get(_dt_key(row), {})
+            dt_matched += bool(probabilities)
+            for target in dt_targets:
+                fields[target] = probabilities.get(target)
         fields["Хеш строки"] = content_hash(fields)
         fields["Обновлено"] = datetime.now().isoformat(timespec="seconds")
 
@@ -225,6 +277,12 @@ def sync(cfg: Config, client, table_ids: dict[str, str], frame: pd.DataFrame,
             client.update_records(opu_table, to_update)
     report.created = len(to_create)
     report.updated = len(to_update)
+    absent = [name for name in SHEET_TO_FIELD if name not in frame.columns]
+    if absent:
+        report.note(f"колонок нет в выгрузке, значения в Teable сохранены: {', '.join(absent)}")
+    if dt_index is not None:
+        report.note(f"DT из базы Digital Twin: найдено {dt_matched} из {len(seen_keys)} циклов, "
+                    f"остальные — пусто")
 
     stale = set(existing) - seen_keys
     if stale:

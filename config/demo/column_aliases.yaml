@@ -19,7 +19,7 @@
 canonical:
   # --- идентификаторы (PHI): используются ТОЛЬКО для cycle_uid и сразу удаляются
   patient_id:   ["ID", "patient_id", "Номер карты пациента", "Номер карты", "ЭМК", "OPU Code",
-                 "Patient ID", "Cycle ID", "MRN", "record_id"]
+                 "Patient ID", "Cycle ID", "MRN", "record_id", "OPU Number"]
   patient_name: ["Patient Full Name", "ФИО", "ФИО пациента", "Patients name", "Patient name",
                  "patient_name", "Full name"]
   dob:          ["DOB", "Дата рождения", "Date of birth", "birth_date"]
@@ -34,11 +34,15 @@ canonical:
 
   # --- метод оплодотворения: одна колонка со значением ИЛИ флаги по методам
   fertilization_method: ["IVF/ICSI", "Fertilization Method", "Fertilization method",
-                         "Метод оплодотворения", "Метод", "fertilization_method", "Method"]
+                         "Метод оплодотворения", "Метод", "fertilization_method", "Method",
+                         "fertilization"]
   ivf_flag:     ["IVF"]
   icsi_flag:    ["ICSI"]
   treatment_type: ["Лечение", "Treatment", "Treatment type", "Тип лечения"]
   sperm_source: ["sperm", "Sperm", "Sperm Source", "sperm_source", "Источник спермы"]
+  # Источник ооцитов: в донорских циклах колонка Age несёт возраст донора (в GGRC —
+  # константа-заглушка), а не пациентки — см. donor_oocyte ниже.
+  oocyte_source: ["Oocyte source", "Источник ооцитов", "oocyte_source"]
   termination_reason: ["Причина завершения программы ВРТ", "Termination reason"]
 
   # --- пациентка
@@ -84,8 +88,13 @@ method_tokens:
 competency_exclusion:
   no_retrieval_tokens: ["NO", "нет", "no retrieval", "без ооцитов"]
   freeze_all_tokens: ["Cryo", "крио", "freeze-all", "freeze all"]
-  surgical_sperm_tokens: ["TESE", "SMF", "MESA", "PESA", "microTESE", "mTESE"]
+  surgical_sperm_tokens: ["TESE", "SMF", "MESA", "PESA", "TESA", "TESA/PESA", "microTESE", "mTESE"]
   embryologist_only_treatment_tokens: ["Только пункция"]
+
+# Донорские ооциты (значение колонки oocyte_source целиком). Возраст в таких строках —
+# не возраст пациентки: он обнуляется в ingest и не входит в case-mix и TGBDR по
+# возрасту. Число донорских циклов печатается в разделе данных.
+donor_oocyte_tokens: ["Donor", "Donor fresh", "Donor frozen", "Донор", "Донорские"]
 
 # Правдоподобие строки. Строка «Итого» под таблицей или счётчик в сотни ооцитов на
 # цикл — не наблюдение, а итог/ошибка ввода: исключается и печатается в разделе данных.

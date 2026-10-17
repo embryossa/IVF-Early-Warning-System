@@ -1,6 +1,6 @@
 """Синхронизировать мастер-таблицу OPU в локальный Teable.
 
-    python scripts/ews_sync_opu.py [--source <csv>] [--dry-run]
+    python scripts/ews_sync_opu.py [--clinic <code>] [--source <csv>] [--dry-run]
 
 Источник по умолчанию — CSV-экспорт листа из machine.local.yaml
 (`google_sheet.export_path`). На черновом стенде экспорт кладётся туда
@@ -25,13 +25,16 @@ from ews.config import ConfigError, embryo_lab_data_on_path, load  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    # --clinic передаёт ews_daily.py. Без этого аргумента шаг падал на разборе
+    # аргументов, оркестратор считал его мягким сбоем, и Teable не обновлялся.
+    parser.add_argument("--clinic", help="код профиля из config/clinics/")
     parser.add_argument("--source", help="CSV-экспорт листа; по умолчанию из machine.local.yaml")
     parser.add_argument("--dry-run", action="store_true",
                         help="посчитать и показать, ничего не записывая")
     args = parser.parse_args()
 
     try:
-        cfg = load()
+        cfg = load(args.clinic)
         embryo_lab_data_on_path(cfg)
     except ConfigError as exc:
         print(f"[!] {exc}")

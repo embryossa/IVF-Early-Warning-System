@@ -201,10 +201,17 @@ def main() -> int:
     # Литературный контур: третья опора, независимая от нашей истории.
     literature = prior.gap_table(frame.data, amh_constant=clinic.amh_constant)
 
+    # Просевшее покрытие блокирует эскалацию (settings: localisation.
+    # coverage_drop_blocks_escalation): до разбора §4 тревоги остаются watch.
+    escalation_block = None
+    if coverage_dropped and cfg.settings.get("localisation", {}).get(
+            "coverage_drop_blocks_escalation", True):
+        escalation_block = "покрытие конверта просело — сначала разбор §4"
     evaluations = evaluate.apply_evaluations(cfg, clinic, frame.data, baselines,
                                              thresholds, states, envelopes,
                                              literature=literature,
-                                             already_evaluated=evaluated)
+                                             already_evaluated=evaluated,
+                                             escalation_block=escalation_block)
 
     levels = pd.Series([item.level for item in evaluations]).value_counts().to_dict()
     print(f"оценено закрытых циклов: {len(evaluations)}  итоги: {levels or '—'}")
@@ -299,7 +306,8 @@ def main() -> int:
     panel.render(cfg, clinic, frame, evaluations, states, baselines, thresholds,
                  panel_path, literature=literature, outcome_windows=outcome_windows,
                  outcome_note=outcome_note, envelope_qc=qc_summary,
-                 coverage_note=coverage_note, outcome_ra=outcome_ra_result)
+                 coverage_note=coverage_note, outcome_ra=outcome_ra_result,
+                 alerts_journal=alerts)
     if outcome_ra_result is not None:
         outcome_ra.write_artifacts(outcome_ra_result, data_dir, cfg.environment,
                                    cfg.path(cfg.settings["privacy"]["agent_packet_dir"]),

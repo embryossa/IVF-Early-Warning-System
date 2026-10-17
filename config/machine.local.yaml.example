@@ -55,6 +55,10 @@ teable:
   url: "http://127.0.0.1:3000"
   base_id: ""                # база OPU-мастера (создаётся в фазе 0)
   opu_table_id: ""
+  # База Digital Twin клиники, таблица Cycles — источник вероятностей DT/PRAI
+  # (settings.yaml: sync.dt_teable). Пусто — поля DT/PRAI синхронизация не трогает.
+  dt_base_id: ""
+  dt_cycles_table_id: ""
   # token -> config/settings.local.yaml, НЕ сюда
 
 airtable:

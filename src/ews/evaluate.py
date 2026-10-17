@@ -249,6 +249,9 @@ def evaluate_cycle(cfg: Config, clinic: Clinic, row: pd.Series,
         state.signals = runner.alert_signals
         crossed = LEVEL_ALERT if event == "alert" else LEVEL_WATCH if event == "watch" else None
 
+        if runner.crossing_value is not None:
+            # точка пересечения до перезапуска: иначе пик и траектория её теряют
+            state.record(row.get("closure_due"), runner.crossing_value)
         state.record(row.get("closure_due"), runner.statistic)
         evaluation.charts[metric] = {
             "statistic": round(state.statistic, 3),
@@ -366,11 +369,16 @@ def apply_evaluations(cfg: Config, clinic: Clinic, frame: pd.DataFrame,
                       states: dict[str, ChartState],
                       envelopes: dict[str, dict] | None = None,
                       literature: pd.DataFrame | None = None,
-                      already_evaluated: set[str] | None = None) -> list[CycleEvaluation]:
+                      already_evaluated: set[str] | None = None,
+                      escalation_block: str | None = None) -> list[CycleEvaluation]:
     """Прогнать закрытые циклы в хронологическом порядке.
 
     Порядок обязателен: карта секвенциальна, и перестановка циклов изменила бы её
     траекторию. Сортировка идёт по дате закрытия, а не по дате пункции.
+
+    `escalation_block` — причина, по которой alert в этом прогоне недоступен помимо
+    гейта окружения (просело покрытие конверта, §4 методологии). Карты обновляются
+    как обычно; меняется только уровень: alert остаётся watch, причина пишется.
     """
     closed = frame.loc[frame["checkpoint"] == "closure"].copy()
     if already_evaluated:
@@ -383,6 +391,9 @@ def apply_evaluations(cfg: Config, clinic: Clinic, frame: pd.DataFrame,
     for _, row in closed.iterrows():
         evaluation = evaluate_cycle(cfg, clinic, row, baselines, thresholds, states,
                                     envelope=envelopes.get(row["cycle_uid"]))
+        if evaluation.level == LEVEL_ALERT and escalation_block:
+            evaluation.level = LEVEL_WATCH
+            evaluation.notes.append(f"alert понижен до watch: {escalation_block}")
         attach_verdict(evaluation, baselines, literature)
         out.append(evaluation)
     return out

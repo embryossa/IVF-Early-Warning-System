@@ -294,7 +294,8 @@ def _facts(res: dict) -> tuple[list[str], list[dict]]:
                          f"{pct(comp, 0)} — отставание по этой выборке статистически не подтверждено.")
     data_notes: list[str] = []
     for r in summary.itertuples():
-        if getattr(r, "cycles_over_one", 0):
+        # NaN у метрики без нужной колонки (ClR без дробления D3) — не наблюдение.
+        if pd.notna(getattr(r, "cycles_over_one", None)) and r.cycles_over_one > 0:
             if r.metric == "ClR":
                 data_notes.append(f"ClR > 100% в {int(r.cycles_over_one)} {plural(int(r.cycles_over_one), 'цикле', 'циклах', 'циклах')} — наблюдение о тайминге проверки "
                              "оплодотворения; ДИ для таких строк не считается.")

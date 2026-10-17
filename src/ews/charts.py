@@ -133,6 +133,9 @@ class CusumRunner:
     last_zero_index: int = 0
     watch_episodes: int = 0
     alert_signals: int = 0
+    # Значение статистики в момент пересечения h_alert — до перезапуска. Нужно
+    # панели и пику: после сброса в траекторию попадает 0, и пересечение исчезает.
+    crossing_value: float | None = None
 
     def step(self, outcome: float, expected: float, odds_ratio: float,
              h_watch: float | None, h_alert: float | None) -> str | None:
@@ -144,8 +147,10 @@ class CusumRunner:
         if self.statistic == 0.0:
             self.last_zero_index = self.observations
 
+        self.crossing_value = None
         if h_alert is not None and self.statistic > h_alert:
             self.alert_signals += 1
+            self.crossing_value = self.statistic
             self.statistic = 0.0
             self.above_watch = False
             self.last_zero_index = self.observations
@@ -182,8 +187,10 @@ class CusumRunner:
         if self.statistic == 0.0:
             self.last_zero_index = self.observations
 
+        self.crossing_value = None
         if h_alert is not None and self.statistic > h_alert:
             self.alert_signals += 1
+            self.crossing_value = self.statistic
             self.statistic = 0.0
             self.above_watch = False
             self.last_zero_index = self.observations

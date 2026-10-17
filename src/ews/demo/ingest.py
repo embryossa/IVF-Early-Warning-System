@@ -256,6 +256,17 @@ def load_demo(path: Path, *, sheet: str | int | None = None,
     else:
         notes.append("Нет колонки даты пункции — временной анализ и контрольные карты недоступны.")
 
+    # Донорские ооциты: Age в таких строках — возраст донора (в выгрузках бывает
+    # заглушкой-константой), а не пациентки; в case-mix и TGBDR по возрасту не идёт.
+    if "oocyte_source" in frame.columns:
+        donor = _match(frame["oocyte_source"], aliases.get("donor_oocyte_tokens", []))
+        frame["donor_oocytes"] = donor
+        if donor.any():
+            if "age" in frame.columns:
+                frame.loc[donor, "age"] = pd.NA
+            notes.append(f"Донорские ооциты в {int(donor.sum())} строках — возраст в них относится к донору "
+                         "и исключён из анализа по возрасту (case-mix, TGBDR по возрасту).")
+
     frame["method"] = derive_method(frame, aliases)
     crosswalks = []
     for col, prefix in (("embryologist", "Эмбриолог"), ("doctor", "Врач")):

@@ -7,8 +7,10 @@
 У нас обе половины есть, но до сих пор жили порознь:
 
 * **быстрый контур** — доли воронки, оценка на 6-й день (карты, консенсус, литература);
-* **медленный контур** — вероятность беременности от ансамбля Digital Twin (`PRAI`,
-  `DIGITAL TWIN`) против фактического исхода, доступного через недели.
+* **медленный контур** — вероятность беременности от Digital Twin (`DIGITAL TWIN`,
+  L7 BEFE) против фактического исхода, доступного через недели. PRAI (TabPFN) убран
+  решением владельца 2026-10-17: в других клиниках доступен именно DT, и опора должна
+  быть одной и той же.
 
 Роль медленного контура — не поднимать тревоги, а **подтверждать или опровергать**
 тренды быстрого. Если процесс просел и предсказанный исход поехал следом — тренд
@@ -30,8 +32,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-# Модельные колонки в мастер-таблице. Обе — вероятность беременности на цикл.
-PRAI = "prai"                    # TabPFN-классификатор
+# Модельная колонка в мастер-таблице — вероятность беременности на цикл.
 DIGITAL_TWIN = "digital_twin"    # L7 BEFE, итоговый ансамбль
 
 
@@ -41,7 +42,6 @@ class OutcomeWindow:
     label: str
     n_cycles: int
     n_known: int
-    predicted_prai: float | None
     predicted_dt: float | None
     observed: float | None
     ci_low: float | None
@@ -76,11 +76,10 @@ def summarise(frame: pd.DataFrame, label: str = "когорта") -> OutcomeWind
     known = outcome.isin([0, 1])
     n_known = int(known.sum())
 
-    prai = pd.to_numeric(frame.get(PRAI), errors="coerce")
     digital_twin = pd.to_numeric(frame.get(DIGITAL_TWIN), errors="coerce")
 
     if n_known == 0:
-        return OutcomeWindow(label, len(frame), 0, None, None, None, None, None,
+        return OutcomeWindow(label, len(frame), 0, None, None, None, None,
                              note="исход не известен ни у одного цикла окна")
 
     successes = float(outcome[known].sum())
@@ -88,7 +87,6 @@ def summarise(frame: pd.DataFrame, label: str = "когорта") -> OutcomeWind
     ci_low, ci_high = _wilson(successes, n_known)
     return OutcomeWindow(
         label=label, n_cycles=len(frame), n_known=n_known,
-        predicted_prai=float(prai[known].mean()) if prai[known].notna().any() else None,
         predicted_dt=(float(digital_twin[known].mean())
                       if digital_twin[known].notna().any() else None),
         observed=observed, ci_low=ci_low, ci_high=ci_high,
@@ -132,10 +130,9 @@ def confirms_process_trend(windows: list[OutcomeWindow],
 
 
 def calibration_note(window: OutcomeWindow) -> str:
-    """Насколько модельные прогнозы согласуются с фактом на этой когорте."""
+    """Насколько прогноз DT согласуется с фактом на этой когорте."""
     parts = []
-    for name, value in (("PRAI", window.predicted_prai),
-                        ("DIGITAL TWIN", window.predicted_dt)):
+    for name, value in (("DIGITAL TWIN", window.predicted_dt),):
         if value is None:
             continue
         agree = window.agrees(value)

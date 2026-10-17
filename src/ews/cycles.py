@@ -32,14 +32,13 @@ TEABLE_TO_CANONICAL = {
     "FSH": "fsh",
     # Итоговые вероятности ансамбля Digital Twin. Медленный контур подтверждения
     # по исходу берёт из DT только их — запускать сам пайплайн не требуется.
-    "PRAI (лист)": "prai",
     "DIGITAL TWIN (лист)": "digital_twin",
 }
 NUMERIC_CANONICAL = {
     "age", "attempt_no", "follicles", "afc", "occ", "mii", "inseminated", "two_pn",
     "three_pn", "one_pn", "zero_pn", "degrade", "cleavage_d3", "bl_total",
     "bl_good", "frozen", "transferred", "transfer_day", "amh", "bmi", "fsh",
-    "prai", "digital_twin",
+    "digital_twin",
 }
 
 
@@ -127,8 +126,23 @@ def load_from_teable(cfg: Config, clinic: Clinic, client, table_id: str,
         frame["checkpoint"] = frame.apply(
             lambda row: assign_checkpoint(row, today, closure_offset), axis=1)
         frame["closure_due"] = frame["date_opu"] + pd.Timedelta(days=closure_offset)
+        frame["fr_denominator"] = fr_denominator(frame)
         frame = frame.sort_values("date_opu", kind="stable").reset_index(drop=True)
     return CycleFrame(data=frame, source=f"teable:{table_id}", loaded_at=today)
+
+
+def fr_denominator(frame: pd.DataFrame) -> pd.Series:
+    """Знаменатель FR и DegR — то же правило, что `_fr_denominator` в embryo.kpi.
+
+    MII, если MII > 0, иначе число инсеминированных. Наблюдаемое «инсеминировано = 0»
+    (витрификация ооцитов, отказ от оплодотворения: методы Cryo / NO) — инсеминации
+    не было, FR для цикла не определён, а не равен нулю. Без этого такие циклы шли в
+    карту FR как полный провал оплодотворения.
+    """
+    mii = pd.to_numeric(frame.get("mii"), errors="coerce")
+    inseminated = pd.to_numeric(frame.get("inseminated"), errors="coerce")
+    denominator = mii.where(mii.notna() & mii.gt(0), inseminated)
+    return denominator.mask(inseminated.eq(0))
 
 
 # Метрики: (числитель, знаменатель). Совпадают с embryo.kpi.KPI_SPECS, но здесь
@@ -136,11 +150,11 @@ def load_from_teable(cfg: Config, clinic: Clinic, client, table_id: str,
 METRIC_PARTS = {
     "OCCR": ("occ", "follicles"),
     "MIIR": ("mii", "occ"),
-    "FR": ("two_pn", "mii"),
+    "FR": ("two_pn", "fr_denominator"),
     "ClR": ("cleavage_d3", "two_pn"),
     "BlR": ("bl_total", "two_pn"),
     "TGBDR": ("bl_good", "two_pn"),
-    "DegR": ("degrade", "mii"),
+    "DegR": ("degrade", "fr_denominator"),
     "3pNR": ("three_pn", "occ"),
 }
 

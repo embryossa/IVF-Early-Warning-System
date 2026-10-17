@@ -31,6 +31,12 @@ STAGE_ACTUAL = {
     "blasts_after_fert": "bl_total",
 }
 
+# Стадии после оплодотворения. Цикл без инсеминации (инсеминировано = 0: Cryo, NO)
+# на них не оценивается: 2PN и бластоцист там нет не потому, что модель промахнулась,
+# а потому что оплодотворения не было. Иначе каждый такой цикл — гарантированный
+# промах ниже P10 (то же правило, что у знаменателя FR, cycles.fr_denominator).
+POST_FERTILISATION = {"pn2", "blasts_early", "blasts_after_fert"}
+
 # Ключ стадии в settings.envelope.baseline_coverage.
 STAGE_BASELINE_KEY = {
     "mii": "mii", "pn2": "pn2",
@@ -56,7 +62,11 @@ def build(frame: pd.DataFrame, envelopes: dict[str, dict],
         entry = envelopes.get(cycle.get("cycle_uid"))
         if not entry:
             continue
+        not_inseminated = pd.to_numeric(pd.Series([cycle.get("inseminated")]),
+                                        errors="coerce").iloc[0] == 0
         for stage, actual_column in STAGE_ACTUAL.items():
+            if stage in POST_FERTILISATION and not_inseminated:
+                continue
             p10, p50, p90 = (entry.get(f"{stage}_p10"), entry.get(f"{stage}_p50"),
                              entry.get(f"{stage}_p90"))
             actual = pd.to_numeric(pd.Series([cycle.get(actual_column)]),

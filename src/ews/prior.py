@@ -108,7 +108,9 @@ def expected_rates(frame: pd.DataFrame,
 
 
 # Метрика -> (числитель, знаменатель) в каноническом кадре.
-PARTS = {"MIIR": ("mii", "occ"), "FR": ("two_pn", "mii"), "BlR": ("bl_total", "two_pn")}
+# FR — через cycles.fr_denominator: цикл без инсеминации в FR не входит.
+PARTS = {"MIIR": ("mii", "occ"), "FR": ("two_pn", "fr_denominator"),
+         "BlR": ("bl_total", "two_pn")}
 
 
 def gap_table(frame: pd.DataFrame,

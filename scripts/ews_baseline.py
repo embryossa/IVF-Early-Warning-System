@@ -81,6 +81,10 @@ def load_lab_population(cfg, clinic: Clinic,
     keys = data.apply(lambda row: cycle_key(clinic, row), axis=1)
     data["cycle_uid"] = [make_cycle_uid(k, secret) if k else None for k in keys]
 
+    # Знаменатель FR/DegR — то же правило, что у карт (ews.cycles.fr_denominator).
+    from ews.cycles import fr_denominator  # noqa: PLC0415
+
+    data["fr_denominator"] = fr_denominator(data)
     excluded = kpi.competency_exclusion_mask(data, columns_cfg)
     return data.loc[~excluded].copy(), int(excluded.sum())
 
