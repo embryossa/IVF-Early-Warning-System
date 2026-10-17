@@ -150,7 +150,7 @@ agent prompt/packet: ID, `_key`, `_join`, ФИО, ДР, сведения муж�
 ## Роли Claude Code
 
 Промежуточные роли — `model: haiku` (однотипное объяснение по готовому пакету):
-`ews-model-auditor`. Синтез и разбор тревоги — `ews-alert-analyst`, `model: claude-opus-5`
+`ews-model-auditor`. Синтез и разбор тревоги — `ews-alert-analyst`, `model: claude-opus-5-5`
 (пин, не alias `opus`). Python считает и классифицирует; агенты только объясняют.
 
 Правило, унаследованное из `embryo-lab-data` и подтверждённое там на реальном отчёте:
