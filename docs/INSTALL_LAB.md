@@ -74,7 +74,11 @@ teable:
   opu_table_id: ""
 
 miri_logs:
-  dump_dir: "<каталог недельной выгрузки MIRI>"
+  # Недельные выгрузки лежат на Google Drive: «Miri/6391/Miri-6391-Incubation-[…]».
+  # При установленном Google Drive для компьютера укажите синхронизированную папку
+  # (например "G:/Мой диск/…/Miri"), в ней должна быть подпапка 6391. Без клиента
+  # Drive — скачайте недельные папки в любой локальный каталог той же структуры.
+  dump_dir: "<каталог, содержащий 6391/>"
   incubator: "6391"
 
 airtable:
@@ -180,6 +184,10 @@ python scripts/ews_daily.py --clinic two_line --dry-run
   тревог с вердиктом.
 - `data/two_line/ews_alerts.csv` — карточки тревог.
 - `data/two_line/ews_window_context.csv` — обстановка окна по каждому циклу.
+- Раздел панели «Медленный контур с поправкой на пациенток» и
+  `data/two_line/ews_outcome_ra_strata.csv` — исход против ожидания DT: O/E по
+  месяцам, эмбриологам, среде и лотам; `ews_outcome_ra_transfers.csv` — VLAD и
+  RA-CUSUM по переносам.
 
 ---
 
