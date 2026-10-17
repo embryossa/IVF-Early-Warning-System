@@ -16,7 +16,11 @@
 | `ews_alerts.csv` | `alert_id` | `alert_id`, `cycle_uid`, `raised_at`, `level`, `chart`, `contour`, `evidence`, `corroboration`, `corroboration_rank`, `miri_status`, `environment` |
 | Agent packet | `cycle_uid` | `schema_version`, `cohort`, `patients[].cycle_uid`; PHI запрещена |
 | `calibration_manifest.json` | — | `calibrated_at`, `window`, `n_cycles`, `n_embryos`, `h_watch`, `h_alert`, `measured_false_alarm_rate` |
-| `run_manifest.json` | `run_id` | `run_id`, `started_at`, `environment`, `soft_step_status`, `contract_version` |
+| `run_manifest.json` | `run_id` | `run_id`, `started_at`, `environment`, `soft_step_status`, `contract_version`, `outcome_ra` |
+| `ews_outcome_ra_transfers.csv` | `cycle_uid` | `cycle_uid`, `date_opu`, `y`, `p_model`, `p_expected`, `vlad`, `cusum`, `cusum_signal`, `embryologist` (псевдоним), `environment_group`, `environment` |
+| `ews_outcome_ra_strata.csv` | `dimension,group` | `dimension`, `group`, `n`, `observed`, `expected`, `oe`, `inner_low/high`, `outer_low/high`, `position`, `environment` |
+| `state/outcome_calibration.json` | — | `delta`, `se`, `n`, `frozen_at`, `last_date_opu`, `expected_column`; пишется один раз |
+| `agent_packets/outcome_ra_<clinic>.json` | — | `summary`, `strata`; без `cycle_uid` и имён |
 
 ## Правила
 

@@ -86,6 +86,102 @@ def _spark(trajectory: list, watch: float | None, alert: float | None,
             f'stroke-width="1.5"/></svg>')
 
 
+def _vlad_svg(values: list[float], width: int = 640, height: int = 120) -> str:
+    """VLAD: накопленная разница «факт − ожидание», ноль — пунктиром.
+
+    Наклон читается без цифр: ровно — исход как ожидалось для этих пациенток, вниз —
+    беременностей меньше ожидаемого, вверх — больше.
+    """
+    if len(values) < 2:
+        return '<span class="muted">нет данных</span>'
+    top = max(max(values), 0.0) + 0.5
+    bottom = min(min(values), 0.0) - 0.5
+    span = top - bottom
+    step = width / (len(values) - 1)
+
+    def y(value: float) -> float:
+        return height - (value - bottom) / span * height
+
+    points = " ".join(f"{i * step:.1f},{y(v):.1f}" for i, v in enumerate(values))
+    zero = y(0.0)
+    return (f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
+            f'preserveAspectRatio="none" role="img" aria-label="VLAD">'
+            f'<line x1="0" y1="{zero:.1f}" x2="{width}" y2="{zero:.1f}" '
+            f'stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 4"/>'
+            f'<polyline points="{points}" fill="none" stroke="var(--clay)" '
+            f'stroke-width="2"/></svg>')
+
+
+POSITION_CLASS = {
+    "ниже внешнего предела": "lvl-alert", "ниже внутреннего предела": "lvl-watch",
+    "выше внутреннего предела": "lvl-ok", "выше внешнего предела": "lvl-ok",
+}
+
+
+def _outcome_ra_section(result) -> list[str]:
+    """Медленный контур с риск-коррекцией по DT: VLAD, CUSUM, O/E по группам."""
+    summary = result.summary()
+    parts = ["<h2>Медленный контур с поправкой на пациенток: исход против ожидания DT</h2>"]
+    if not summary["transfers_with_outcome"]:
+        parts.append('<div class="note">Переносов с известным исходом и ожиданием DT '
+                     'нет — контур не построен.</div>')
+        return parts
+    overall = summary["overall"]
+    cusum = summary["cusum"]
+    oe = f"{overall['oe']:.2f}" if overall.get("oe") is not None else "—"
+    h_text = f"{cusum['h']:.2f}" if cusum["h"] is not None else "—"
+    parts.append('<div class="grid">')
+    for label, value, foot in (
+        ("Переносов с исходом", str(summary["transfers_with_outcome"]),
+         f"факт {overall['observed']} · ожидание {overall['expected']}"),
+        ("O/E всего", oe, overall.get("position", "")),
+        ("VLAD на сегодня", f"{summary['vlad_last']:+.1f}",
+         "беременностей сверх (+) или недобор (−) к ожиданию"),
+        ("RA-CUSUM", f"{cusum['last']:.2f}",
+         f"порог {h_text} · сигналов {cusum['signals']} · "
+         f"~{cusum['transfers_per_year']:.0f} переносов/год"),
+    ):
+        parts.append(f'<div class="card tile"><div class="metric">{escape(label)}</div>'
+                     f'<div class="value">{escape(value)}</div>'
+                     f'<div class="foot">{escape(str(foot))}</div></div>')
+    parts.append("</div>")
+    vlad = result.transfers["vlad"].round(3).tolist()
+    trajectory = [[i, v] for i, v in enumerate(result.transfers["cusum"].tolist())]
+    parts.append(f'<div class="card"><div class="metric muted">VLAD по переносам в '
+                 f'порядке пункции</div>{_vlad_svg(vlad)}'
+                 f'<div class="metric muted" style="margin-top:10px">RA-CUSUM на снижение '
+                 f'шансов беременности в {1 / result.odds_ratio:.0f} раза</div>'
+                 f'{_spark(trajectory, cusum["h"], None, width=640, height=40)}</div>')
+
+    parts.append('<div class="card scroll"><table><tr><th>разрез</th><th>группа</th>'
+                 '<th class="num">n</th><th class="num">факт</th><th class="num">ожидание</th>'
+                 '<th class="num">O/E</th><th class="num">пределы 95%</th>'
+                 '<th class="num">пределы 99.8%</th><th>положение</th></tr>')
+    for row in result.strata.to_dict("records"):
+        def limits(low: str, high: str) -> str:
+            if row.get(low) is None or pd.isna(row.get(low)):
+                return "—"
+            return f"{row[low]:.2f}–{row[high]:.2f}"
+        oe_cell = "—" if row.get("oe") is None or pd.isna(row.get("oe")) else f"{row['oe']:.2f}"
+        css = POSITION_CLASS.get(row["position"], "muted")
+        parts.append(
+            f"<tr><td>{escape(str(row['dimension']))}</td><td>{escape(str(row['group']))}</td>"
+            f'<td class="num">{row["n"]}</td><td class="num">{row["observed"]}</td>'
+            f'<td class="num">{row["expected"]}</td><td class="num">{oe_cell}</td>'
+            f'<td class="num">{limits("inner_low", "inner_high")}</td>'
+            f'<td class="num">{limits("outer_low", "outer_high")}</td>'
+            f'<td class="{css}">{escape(row["position"])}</td></tr>')
+    parts.append("</table></div>")
+    notes = [summary["calibration"]["note"], summary["note"], *summary["notes"]]
+    parts.append('<div class="note"><b>Как читать.</b> Ожидание — итоговая вероятность '
+                 'Digital Twin для каждой пациентки, сдвинутая на уровень клиники '
+                 '(сдвиг заморожен и не подстраивается под факт). O/E ниже предела — '
+                 'беременностей меньше, чем ждали для ЭТИХ пациенток; это повод посмотреть '
+                 'на группу, не вывод о лоте или специалисте. Контур тревог не поднимает.'
+                 f'<br>{"<br>".join(escape(n) for n in notes if n)}</div>')
+    return parts
+
+
 def _level_cell(level: str) -> str:
     label = {"ok": "в норме", "watch": "watch", "alert": "ALERT"}.get(level, level)
     return f'<span class="lvl-{level}">{escape(label)}</span>'
@@ -102,7 +198,7 @@ ACTION_LABEL = {
 def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
            states: dict, baselines: dict, thresholds: dict, path: Path,
            literature=None, outcome_windows=None, outcome_note: str = "",
-           envelope_qc=None, coverage_note: str = "") -> Path:
+           envelope_qc=None, coverage_note: str = "", outcome_ra=None) -> Path:
     environment = cfg.environment
     block = cfg.alert_block_reason()
     counts = frame.data["checkpoint"].value_counts().to_dict()
@@ -303,6 +399,8 @@ def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
                      f'тревог: исход зависит от переноса, эндометрия и десятка вещей '
                      f'вне лаборатории. Его роль — подтверждать или опровергать тренды '
                      f'быстрого контура.<br>{escape(outcome_note)}</div>')
+    if outcome_ra is not None:
+        parts.extend(_outcome_ra_section(outcome_ra))
 
     # --- сводка ---
     parts.append("<h2>Итог прогона</h2>")

@@ -26,7 +26,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ews import (confounders, cycles, envelope, envelope_qc,  # noqa: E402
-                 evaluate, outcome, panel, prior, teable_client)
+                 evaluate, outcome, outcome_ra, panel, prior, teable_client)
 from ews.clinic import load_clinic  # noqa: E402
 from ews.config import ConfigError, embryo_lab_data_on_path, load  # noqa: E402
 
@@ -73,6 +73,44 @@ def alerts_frame(evaluations: list, environment: str, clinic_code: str) -> pd.Da
             "environment": environment,
         })
     return pd.DataFrame(rows)
+
+
+def outcome_ra_step(cfg, clinic, data: pd.DataFrame, data_dir: Path,
+                    freeze: bool) -> "outcome_ra.OutcomeRA | None":
+    """Риск-скорректированный медленный контур. Мягкий шаг: сбой не валит прогон.
+
+    Лоты тянутся из Airtable, только если клиника их ведёт; среда — из артефакта
+    недельного прохода (`ews_window_context.csv`), логи заново не разбираются.
+    """
+    try:
+        timeline, lots_note = (outcome_ra.fetch_timeline(cfg) if clinic.source_enabled("lots")
+                               else (None, "лоты выключены в профиле клиники"))
+        env_baseline, _ = confounders.load_baseline(cfg, clinic)
+        result = outcome_ra.build(
+            data, cfg.settings, data_dir, clinic.window_bounds()[0],
+            timeline=timeline,
+            window_days=int(cfg.settings["soft_steps"]["miri"]["cultivation_window_days"]),
+            context_csv=data_dir / "ews_window_context.csv", env_baseline=env_baseline,
+            freeze=freeze, environment=cfg.environment)
+    except Exception as exc:  # noqa: BLE001 — мягкий шаг, как confounders
+        print(f"\n[warn] риск-скорректированный контур не построен: {exc}")
+        return None
+    summary = result.summary()
+    overall = summary["overall"]
+    if not summary["transfers_with_outcome"]:
+        print("\nисход против ожидания DT: переносов с исходом и ожиданием нет")
+        return result
+    print(f"\nисход против ожидания DT: переносов {summary['transfers_with_outcome']}, "
+          f"факт {overall['observed']}, ожидание {overall['expected']}, "
+          f"O/E {overall['oe']} ({overall['position']})")
+    print(f"  {summary['calibration']['note']}")
+    print(f"  {lots_note}")
+    print(f"  VLAD {summary['vlad_last']:+}  RA-CUSUM {summary['cusum']['last']} "
+          f"(порог {summary['cusum']['h']}, сигналов {summary['cusum']['signals']})")
+    print(f"  {result.note}")
+    for note in result.notes:
+        print(f"  {note}")
+    return result
 
 
 def main() -> int:
@@ -230,6 +268,11 @@ def main() -> int:
     outcome_verdict, outcome_note = outcome.confirms_process_trend(outcome_windows)
     print(f"\nмедленный контур: {outcome_note}")
 
+    # Тот же контур с поправкой на пациенток: факт против ожидания DT, VLAD и
+    # RA-CUSUM, O/E по месяцам, эмбриологам, среде и лотам. Тоже без тревог.
+    outcome_ra_result = outcome_ra_step(cfg, clinic, frame.data, data_dir,
+                                        freeze=not args.dry_run)
+
     if args.dry_run:
         print("\n(dry-run: ничего не записано)")
         return 0
@@ -256,7 +299,11 @@ def main() -> int:
     panel.render(cfg, clinic, frame, evaluations, states, baselines, thresholds,
                  panel_path, literature=literature, outcome_windows=outcome_windows,
                  outcome_note=outcome_note, envelope_qc=qc_summary,
-                 coverage_note=coverage_note)
+                 coverage_note=coverage_note, outcome_ra=outcome_ra_result)
+    if outcome_ra_result is not None:
+        outcome_ra.write_artifacts(outcome_ra_result, data_dir, cfg.environment,
+                                   cfg.path(cfg.settings["privacy"]["agent_packet_dir"]),
+                                   clinic.code)
 
     manifest = {
         "run_id": datetime.now().strftime("%Y%m%dT%H%M%S"),
@@ -269,6 +316,8 @@ def main() -> int:
         "levels": levels,
         "alert_gate": block or "open",
         "outcome_contour": {"verdict": outcome_verdict, "note": outcome_note},
+        "outcome_ra": (outcome_ra_result.summary() if outcome_ra_result is not None
+                       else {"status": "not_built"}),
         "confounder_baseline": baseline_note,
         "envelope_qc": (qc_summary.to_dict("records") if not qc_summary.empty else []),
         "coverage_blocks_escalation": coverage_dropped,
