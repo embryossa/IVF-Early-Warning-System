@@ -59,7 +59,20 @@ def save_ids(cfg: Config, base_id: str, opu_table_id: str, sync_table_id: str) -
     Идентификаторы базы машинозависимы (локальный Teable у каждой машины свой),
     поэтому их место именно там, а не в settings.yaml. Запись атомарная.
     """
-    from .config import CONFIG_DIR
+    from .config import CONFIG_DIR, machine_overlay_path
+
+    overlay = machine_overlay_path(cfg.clinic_code) if cfg.clinic_code else None
+    if overlay is not None and overlay.exists():
+        # Клиника со своим оверлеем: id пишутся только туда, общий файл не трогается.
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load(overlay.read_text(encoding="utf-8")) or {}
+        data.setdefault("teable", {}).update(
+            {"base_id": base_id, "opu_table_id": opu_table_id, "sync_table_id": sync_table_id})
+        tmp = overlay.with_suffix(".yaml.tmp")
+        tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        tmp.replace(overlay)
+        return
 
     path = CONFIG_DIR / "machine.local.yaml"
     text = path.read_text(encoding="utf-8")

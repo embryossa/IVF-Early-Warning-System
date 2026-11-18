@@ -20,12 +20,13 @@ from ews.config import ConfigError, load  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--clinic", help="код профиля из config/clinics/")
     parser.add_argument("--dry-run", action="store_true",
                         help="показать, что было бы создано, ничего не меняя")
     args = parser.parse_args()
 
     try:
-        cfg = load()
+        cfg = load(args.clinic)
     except ConfigError as exc:
         print(f"[!] {exc}")
         return 2
@@ -85,7 +86,7 @@ def main() -> int:
     if not args.dry_run:
         teable_client.save_ids(cfg, base_id, table_ids.get("OPU", ""),
                                table_ids.get("Sync", ""))
-        print(f"id записаны в config/machine.local.yaml")
+        print("id записаны в config/machine.local.yaml или в оверлей machine.<clinic>.local.yaml")
 
     print(f"\nитог: таблиц создано {made_tables}, полей добавлено {made_fields}")
     return 0
