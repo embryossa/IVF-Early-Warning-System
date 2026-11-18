@@ -1,0 +1,98 @@
+# config/clinics/two_line/columns.yaml — соответствие колонок мастер-таблицы.
+#
+# Единственное место, где имена колонок этой лаборатории превращаются в канонические.
+# Неизвестное имя не угадывается: если колонки нет — метрика, которой она нужна,
+# помечается недоступной, а не считается по подвернувшемуся столбцу.
+#
+# Имена берутся РОВНО как в выгрузке, включая висячие пробелы.
+
+# Канонические имена совпадают с embryo-lab-data (config/columns.yaml соседнего
+# проекта), чтобы модули kpi/ozema/regression_qc принимали кадр без переходников.
+canonical:
+  age: "Age"
+  attempt_no: "# Attempt"
+  follicles: "N folicules OPU"
+  afc: "Antral follicule count"
+  occ: "OCC"
+  mii: "MII"
+  inseminated: "Inseminated"
+  two_pn: "2pN"
+  three_pn: "3pN"
+  one_pn: "1pN"
+  zero_pn: "0pN"
+  degrade: "Deg"
+  cleavage_d3: "Cleavage"
+  bl_total: "Bl"
+  bl_good: "Good Bl"
+  frozen: "Cryo"
+  transferred: "ET"
+  transfer_day: "Day of ET"
+  transfer_outcome: "Preg"
+  fertilization_method: "IVF/ICSI"
+  sperm_source: "sperm"
+  embryologist: "Embryologist"
+  doctor: "Doctor"
+  patient_id: "ID"
+  patient_name: "Patient Full Name"
+  dob: "DOB"
+  date_opu: "Date OPU"
+  date_et: "Date ET"
+  amh: "AMH"
+  bmi: "BMI"
+  fsh: "FSH"
+  # Итоговые вероятности ансамбля Digital Twin. Из DT нужны только они, и они уже
+  # приходят в мастер-таблице — пайплайн DT запускать не требуется.
+  prai: "PRAI"
+  digital_twin: "DIGITAL TWIN"
+
+# Числовые колонки и точность. Всё, чего здесь нет, читается как текст.
+# Пустая ячейка -> пропуск, НЕ ноль: ноль здесь известное наблюдение.
+numeric:
+  age: 0
+  attempt_no: 0
+  follicles: 0
+  afc: 0
+  occ: 0
+  mii: 0
+  inseminated: 0
+  two_pn: 0
+  three_pn: 0
+  one_pn: 0
+  zero_pn: 0
+  degrade: 0
+  cleavage_d3: 0
+  bl_total: 0
+  bl_good: 0
+  frozen: 0
+  transferred: 0
+  transfer_day: 0
+  amh: 2
+  bmi: 1
+  fsh: 2
+  prai: 3
+  digital_twin: 3
+
+dates:
+  - date_opu
+  - date_et
+
+# Формат дат в выгрузке. Пробуются по порядку.
+date_formats: ["%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"]
+
+# Десятичный разделитель в числах. Запятая — норма для этой выгрузки.
+decimal_comma: true
+
+# Ключ цикла: составной, потому что у повторных попыток одной пациентки общий
+# паспортный ID, и join по нему схлопнул бы разные циклы в один.
+cycle_key: ["patient_id", "date_opu_raw"]
+
+# Поля, появление которых двигает цикл по чекпойнтам.
+checkpoint_fields:
+  fertilisation: ["two_pn", "three_pn", "one_pn", "zero_pn", "degrade"]
+  closure: ["cleavage_d3", "bl_total", "bl_good", "frozen"]
+
+# PHI: остаётся локально, никогда не уходит в агентский пакет и в панель.
+phi:
+  - patient_id
+  - patient_name
+  - dob

@@ -1,0 +1,43 @@
+# config/clinics/persona/clinic.yaml — профиль лаборатории PERSONA.
+# Метод — config/settings.yaml (общий). Здесь только то, что относится к PERSONA.
+
+code: "persona"
+name: "PERSONA"
+# Подтверждено владельцем 2026-11-18.
+timezone: "Asia/Almaty"
+
+teable:
+  base_name: "EWS — OPU master (PERSONA)"
+
+reference_window:
+  start: "2023-01-01"
+  end: "2025-12-31"
+  declared_by: "owner"
+  declared_at: "2026-11-18"
+  note: >
+    Решение владельца 2026-11-18: опорное окно — вся ретроспектива 2023–2025.
+    2026 — проспективная когорта статьи и период проверки; в окно не входит.
+    Сдвиги, которые окно вобрало, печатает ews_baseline.py как baseline_caveats.
+  declared_shifts: {}
+
+charts:
+  cusum: ["FR", "BlR", "MIIR"]
+  subjective_denominator:
+    OCCR: >
+      Знаменатель — число фолликулов, субъективный счёт врача на пункции. Дрейфует
+      вместе с практикой счёта и имитирует сдвиг процесса. Метрика остаётся в
+      абсолютном контуре, но секвенциальной карты не получает.
+
+imputation:
+  # AMH в выгрузках PERSONA есть; константа не задаётся.
+  amh_constant: null
+  amh_source_note: ""
+  # Пустой «№ попытки» = первая попытка: то же правило, что владелец принял для
+  # PERSONA в DT/Laya 2026-10-19 (--impute-dt71).
+  attempt_default: 1
+
+sources:
+  # Владелец 2026-11-18: логов MIRI и учёта лотов у PERSONA нет.
+  miri: false
+  lots: false
+  pgt: false

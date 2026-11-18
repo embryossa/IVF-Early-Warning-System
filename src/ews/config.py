@@ -129,6 +129,27 @@ class Config:
         return bool(self.secrets.get("enabled", {}).get(name, False))
 
 
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for key, value in (over or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def machine_overlay_path(code: str) -> Path:
+    """Машинный слой конкретной клиники: config/machine.<code>.local.yaml.
+
+    Секции teable / google_sheet / airtable / miri_logs в machine.local.yaml описывают
+    одну клинику. Вторая клиника на той же машине кладёт СВОИ значения в оверлей, и он
+    накрывает общий файл только при запуске с её кодом — иначе bootstrap второй клиники
+    перезаписал бы id базы первой.
+    """
+    return CONFIG_DIR / f"machine.{code}.local.yaml"
+
+
 def load(clinic: str | None = None) -> Config:
     settings = _load_yaml(CONFIG_DIR / "settings.yaml", required=True)
     machine = _load_yaml(
@@ -140,6 +161,10 @@ def load(clinic: str | None = None) -> Config:
         hint="скопируйте settings.local.yaml.example, если нужны токены.",
     )
     code = clinic or str(machine.get("embryo_lab_data", {}).get("clinic") or "").strip()
+    if code:
+        overlay = _load_yaml(machine_overlay_path(code), required=False)
+        if overlay:
+            machine = _deep_merge(machine, overlay)
 
     # Подобранные пороги живут в отдельном СГЕНЕРИРОВАННОМ файле на клинику, а не в
     # settings.yaml. Три причины, все существенные: запись бэкфитом в settings.yaml
