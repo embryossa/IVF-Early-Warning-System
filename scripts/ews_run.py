@@ -91,7 +91,8 @@ def outcome_ra_step(cfg, clinic, data: pd.DataFrame, data_dir: Path,
             timeline=timeline,
             window_days=int(cfg.settings["soft_steps"]["miri"]["cultivation_window_days"]),
             context_csv=data_dir / "ews_window_context.csv", env_baseline=env_baseline,
-            freeze=freeze, environment=cfg.environment)
+            freeze=freeze, environment=cfg.environment,
+            window_end=clinic.window_end_explicit)
     except Exception as exc:  # noqa: BLE001 — мягкий шаг, как confounders
         print(f"\n[warn] риск-скорректированный контур не построен: {exc}")
         return None
@@ -271,7 +272,8 @@ def main() -> int:
 
     # Медленный контур: подтверждение по исходу. Тревог не поднимает — считается
     # до записи артефактов, потому что попадает и в панель, и в манифест.
-    outcome_windows = outcome.compare_periods(frame.data, clinic.window_bounds()[0])
+    outcome_windows = outcome.compare_periods(frame.data, clinic.window_bounds()[0],
+                                              end=clinic.window_end_explicit)
     outcome_verdict, outcome_note = outcome.confirms_process_trend(outcome_windows)
     print(f"\nмедленный контур: {outcome_note}")
 

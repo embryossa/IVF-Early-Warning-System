@@ -521,20 +521,37 @@ class OutcomeRA:
         }
 
 
-def period_verdict(transfers: pd.DataFrame, split: pd.Timestamp, cfg: dict) -> tuple[bool | None, str]:
+def period_verdict(transfers: pd.DataFrame, split: pd.Timestamp, cfg: dict,
+                   end: pd.Timestamp | None = None) -> tuple[bool | None, str]:
     """Подтверждает ли исход тренд процесса — с поправкой на состав пациенток.
 
     Опорное окно сравнивается с ожиданием DT (после сдвига на центр): если O/E окна
     ниже внутреннего предела, изменение дошло до результата И не объясняется тем,
     какие пациентки пришли. Сырые частоты так не умеют.
+
+    При явном конце окна (``end``) вердикт выносится по периоду ПОСЛЕ окна, если в нём
+    набралось исходов: это текущий период, к которому относятся свежие тренды
+    процесса. O/E самого окна печатается рядом для сравнения.
     """
-    recent = transfers.loc[transfers["date_opu"] >= split]
-    if len(recent) < cfg["min_known_period"]:
-        return None, (f"исходов в опорном окне {len(recent)} из нужных "
+    window = transfers.loc[transfers["date_opu"] >= split]
+    if end is not None:
+        window = window.loc[window["date_opu"] <= end]
+        after = transfers.loc[transfers["date_opu"] > end]
+        if len(after) >= cfg["min_known_period"]:
+            w = oe_row(window["y"], window["p_expected"], cfg["inner_limit"], cfg["outer_limit"],
+                       cfg["min_known_period"])
+            verdict, text = _oe_verdict(after, cfg, "периода после окна")
+            return verdict, f"{text}; для сравнения O/E опорного окна {w['oe']:.2f} (n={w['n']})"
+    if len(window) < cfg["min_known_period"]:
+        return None, (f"исходов в опорном окне {len(window)} из нужных "
                       f"{cfg['min_known_period']} — риск-скорректированный контур ещё не созрел")
+    return _oe_verdict(window, cfg, "опорного окна")
+
+
+def _oe_verdict(recent: pd.DataFrame, cfg: dict, label: str) -> tuple[bool, str]:
     row = oe_row(recent["y"], recent["p_expected"], cfg["inner_limit"], cfg["outer_limit"],
                  cfg["min_known_period"])
-    text = (f"O/E опорного окна {row['oe']:.2f} при пределах {row['inner_low']:.2f}–"
+    text = (f"O/E {label} {row['oe']:.2f} при пределах {row['inner_low']:.2f}–"
             f"{row['inner_high']:.2f} (n={row['n']}, факт {row['observed']}, "
             f"ожидание {row['expected']:.1f})")
     if row["position"] in (POSITION_LOW_INNER, POSITION_LOW_OUTER):
@@ -548,7 +565,8 @@ def build(frame: pd.DataFrame, settings: dict, data_dir: Path, split: pd.Timesta
           *, timeline: pd.DataFrame | None = None, window_days: int = 6,
           context_csv: Path | None = None, env_baseline: dict | None = None,
           freeze: bool = True, environment: str = "draft",
-          rng: np.random.Generator | None = None) -> OutcomeRA:
+          rng: np.random.Generator | None = None,
+          window_end: pd.Timestamp | None = None) -> OutcomeRA:
     """Собрать контур целиком. ``freeze=False`` (dry-run) не пишет сдвиг на диск."""
     cfg = settings_of(settings)
     rng = rng or np.random.default_rng(20261017)
@@ -621,7 +639,7 @@ def build(frame: pd.DataFrame, settings: dict, data_dir: Path, split: pd.Timesta
     elif timeline is None:
         notes.append("лоты: история из Airtable не загружена — группы по лотам не строились")
 
-    verdict, note = period_verdict(transfers, split, cfg)
+    verdict, note = period_verdict(transfers, split, cfg, end=window_end)
     table = pd.DataFrame(rows)
     flagged = table.loc[table["position"].isin([POSITION_LOW_OUTER, POSITION_LOW_INNER])
                         & (table["dimension"] != "всего")]
