@@ -59,6 +59,12 @@ class Clinic:
         return start, end
 
     @property
+    def window_end_explicit(self) -> pd.Timestamp | None:
+        """Конец опорного окна, только если он задан в профиле (без подстановки сегодня)."""
+        end = self.reference_window.get("end")
+        return pd.Timestamp(end) if end else None
+
+    @property
     def declared_shifts(self) -> dict:
         return self.reference_window.get("declared_shifts") or {}
 

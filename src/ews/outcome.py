@@ -94,12 +94,23 @@ def summarise(frame: pd.DataFrame, label: str = "когорта") -> OutcomeWind
 
 
 def compare_periods(frame: pd.DataFrame, split: pd.Timestamp,
-                    before: str = "до окна", after: str = "опорное окно"
+                    before: str = "до окна", after: str = "опорное окно",
+                    end: pd.Timestamp | None = None, beyond: str = "после окна"
                     ) -> list[OutcomeWindow]:
-    """Исход до и после границы опорного окна — тот же разрез, что у процесса."""
+    """Исход по периодам относительно опорного окна — тот же разрез, что у процесса.
+
+    Без ``end`` — два периода: до окна и от его начала. С явным концом окна — три:
+    до окна, само окно и период после него. Это нужно клиникам, у которых окно
+    начинается с первого дня данных: «до окна» у них пусто, и единственное осмысленное
+    сравнение — окно против того, что было после него.
+    """
     dates = pd.to_datetime(frame.get("date_opu"), errors="coerce")
+    if end is None:
+        return [summarise(frame.loc[dates < split], before),
+                summarise(frame.loc[dates >= split], after)]
     return [summarise(frame.loc[dates < split], before),
-            summarise(frame.loc[dates >= split], after)]
+            summarise(frame.loc[(dates >= split) & (dates <= end)], after),
+            summarise(frame.loc[dates > end], beyond)]
 
 
 def confirms_process_trend(windows: list[OutcomeWindow],

@@ -3,8 +3,13 @@ from types import SimpleNamespace
 
 import yaml
 
-from ews import config as config_mod
-from ews import teable_client
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from ews import config as config_mod  # noqa: E402
+from ews import teable_client  # noqa: E402
 
 
 def _setup(tmp_path, monkeypatch):
