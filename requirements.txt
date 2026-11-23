@@ -6,3 +6,4 @@ scipy>=1.11
 python-calamine>=0.2      # быстрый путь чтения Excel; без него молчаливый откат на openpyxl
 openpyxl>=3.1
 pytest>=8.0
+plotly>=5.0             # только демо-панель (src/ews/demo)

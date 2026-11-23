@@ -45,6 +45,27 @@ STAGE_BASELINE_KEY = {
 
 DEGENERATE = "envelope_degenerate"
 
+# Режим регистрации конверта. Ранним предупреждением является только первый:
+# ретроспективный добор писался моделью, которая обучалась в том числе на этих
+# циклах, и его покрытие — свойство добора, а не прогноза.
+MODE_PROSPECTIVE = "prospective"
+
+# Минимум наблюдений для теста покрытия. Ниже него биномиальный тест не отличает
+# просадку от разброса, и «нет решения» честнее любого решения.
+MIN_N_FOR_TEST = 10
+
+
+def _p_below(successes: int, n: int, expected) -> float:
+    """p-value одностороннего теста «покрытие ниже опорного».
+
+    Односторонний намеренно: проверяется только ПАДЕНИЕ покрытия. Рост означает,
+    что интервалы шире нужного — это потеря чувствительности, а не сбой.
+    """
+    if not expected or n < MIN_N_FOR_TEST:
+        return np.nan
+    return float(stats.binomtest(successes, n, float(expected),
+                                 alternative="less").pvalue)
+
 
 def build(frame: pd.DataFrame, envelopes: dict[str, dict],
           settings: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -107,17 +128,32 @@ def build(frame: pd.DataFrame, envelopes: dict[str, dict],
         observed = float(group["in80"].mean())
         expected = baseline.get(STAGE_BASELINE_KEY.get(stage, ""), None)
         n = len(group)
-        # Односторонний тест: проверяется только ПАДЕНИЕ покрытия. Рост означает,
-        # что интервалы шире нужного — это потеря чувствительности, а не сбой.
-        p_value = (float(stats.binomtest(int(group["in80"].sum()), n,
-                                         float(expected), alternative="less").pvalue)
-                   if expected and n >= 10 else np.nan)
+        p_value = _p_below(int(group["in80"].sum()), n, expected)
+
+        # Проспективное подмножество считается ОТДЕЛЬНО, и именно оно решает,
+        # блокировать ли эскалацию (решение владельца, 2026-09-10). Пулированное
+        # число смешивает две популяции с разным происхождением: измерено на этой
+        # когорте — blasts_after_fert даёт 0.699 на ретроспективном доборе (n=73)
+        # против 0.833 на проспективных конвертах (n=6), и в пуле выходит 0.709.
+        # Запирать alert числом, которое тянет вниз добор, — значит блокировать
+        # тревогу данными, которые по определению проекта ранним предупреждением
+        # не являются. Пулированное остаётся в отчёте: оно нужно аудиту модели.
+        forward = group.loc[group["mode"] == MODE_PROSPECTIVE]
+        n_forward = len(forward)
+        observed_forward = float(forward["in80"].mean()) if n_forward else np.nan
+        p_forward = _p_below(int(forward["in80"].sum()), n_forward, expected)
+
         summary.append({
             "stage": stage, "n": n,
             "coverage": round(observed, 3),
             "baseline": expected,
             "delta_pp": round((observed - expected) * 100, 1) if expected else None,
             "p_below": round(p_value, 4) if not pd.isna(p_value) else None,
+            "n_prospective": n_forward,
+            "coverage_prospective": (round(observed_forward, 3)
+                                     if n_forward else None),
+            "p_below_prospective": (round(p_forward, 4)
+                                    if not pd.isna(p_forward) else None),
             "mae_p50": round(float((group["actual"] - group["p50"]).abs().mean()), 2),
             "degenerate_share": round(
                 float((per_cycle.loc[per_cycle["stage"] == stage, "status"]
@@ -132,14 +168,36 @@ def coverage_alarm(summary: pd.DataFrame, alpha: float = 0.01) -> tuple[bool, st
     Падение покрытия сразу по нескольким стадиям — не сигнал культивирования, а
     повод разобрать модель и состав пациенток (docs/METHODOLOGY.md §4). Пока разбор
     не сделан, тревоги остаются на уровне watch.
+
+    Судит ТОЛЬКО по проспективным конвертам: см. комментарий в `build`. Пока их
+    меньше `MIN_N_FOR_TEST` на стадию, `p_below_prospective` пуст, и гейт молчит —
+    не потому что всё хорошо, а потому что решать не на чем. Это состояние обязано
+    быть видно в отчёте, поэтому его называет вторая половина возвращаемого текста.
     """
-    if summary.empty or "p_below" not in summary:
+    if summary.empty or "p_below_prospective" not in summary:
         return False, ""
-    dropped = summary.loc[summary["p_below"].notna()
-                          & (summary["p_below"] < alpha)]
+    dropped = summary.loc[summary["p_below_prospective"].notna()
+                          & (summary["p_below_prospective"] < alpha)]
     if dropped.empty:
-        return False, ""
+        return False, _coverage_silence_note(summary)
     stages = ", ".join(dropped["stage"])
-    return True, (f"покрытие конверта значимо ниже опорного на стадиях: {stages}. "
-                  f"Это не сигнал культивирования — сначала разбирается состав "
-                  f"пациенток и дрейф модели (§4), эскалация до alert заблокирована")
+    return True, (f"покрытие проспективного конверта значимо ниже опорного на "
+                  f"стадиях: {stages}. Это не сигнал культивирования — сначала "
+                  f"разбирается состав пациенток и дрейф модели (§4), эскалация "
+                  f"до alert заблокирована")
+
+
+def _coverage_silence_note(summary: pd.DataFrame) -> str:
+    """Почему гейт молчит: «проверено и чисто» против «проверять пока нечем».
+
+    Разница не косметическая. Первое — свидетельство в пользу конверта, второе —
+    его отсутствие, и читатель отчёта обязан различать их без чтения кода.
+    """
+    untested = summary.loc[summary["p_below_prospective"].isna(), "stage"]
+    if untested.empty:
+        return ""
+    have = int(summary["n_prospective"].fillna(0).max())
+    return (f"покрытие по проспективным конвертам ещё не проверялось на стадиях: "
+            f"{', '.join(untested)} — их накоплено до {have} при минимуме "
+            f"{MIN_N_FOR_TEST}. Эскалация не блокируется, но и подтверждения "
+            f"конверту пока нет")

@@ -249,12 +249,18 @@ def evaluate_cycle(cfg: Config, clinic: Clinic, row: pd.Series,
         state.signals = runner.alert_signals
         crossed = LEVEL_ALERT if event == "alert" else LEVEL_WATCH if event == "watch" else None
 
-        if runner.crossing_value is not None:
-            # точка пересечения до перезапуска: иначе пик и траектория её теряют
-            state.record(row.get("closure_due"), runner.crossing_value)
-        state.record(row.get("closure_due"), runner.statistic)
+        # В пик и траекторию идёт ДОСТИГНУТОЕ значение, а не остаток после
+        # обнуления. Иначе экскурсия, ради которой карта и существует, не попадает
+        # никуда: `statistic` после сигнала alert равна нулю, и отчёт печатал
+        # «сигналов 1, пик 6.25 при пороге 7.44» — пик ниже порога, который был
+        # пересечён. На шагах без сигнала attained и statistic совпадают.
+        state.record(row.get("closure_due"), runner.attained)
         evaluation.charts[metric] = {
-            "statistic": round(state.statistic, 3),
+            "statistic": round(runner.attained, 3),
+            # Остаток после обнуления. Нужен отдельно: карточка тревоги обязана
+            # нести величину, НА КОТОРОЙ сработала карта, а панель — то, с чего
+            # карта продолжит копить завтра.
+            "statistic_after": round(state.statistic, 3),
             "peak": round(state.peak, 3),
             "observations": state.observations,
             "expected_source": source,
@@ -285,12 +291,11 @@ def evaluate_cycle(cfg: Config, clinic: Clinic, row: pd.Series,
             cfg, evaluation, crossed_watch)
 
     # 4. Быстрый маршрут: watch + сильное независимое подтверждение -> alert.
-    if (evaluation.level == LEVEL_WATCH
-            and evaluation.corroboration_rank == RANK_STRONG):
-        evaluation.level = LEVEL_ALERT
-        evaluation.notes.append(
-            "повышено до alert по быстрому маршруту: сработала карта и есть "
-            "сильное независимое подтверждение")
+    #    Здесь он почти никогда не срабатывает — сильное подтверждение приходит
+    #    позже, отдельным шагом (см. escalate_with_context). Вызов оставлен, чтобы
+    #    маршрут был ОДИН: появись сильный источник внутри _corroborate, он не
+    #    потерялся бы молча.
+    escalate_with_context(cfg, evaluation)
 
     # 5. Гейт. Уровень alert недоступен, пока окружение черновое или пороги
     #    не откалиброваны в этом же окружении.
@@ -300,6 +305,151 @@ def evaluate_cycle(cfg: Config, clinic: Clinic, row: pd.Series,
         evaluation.notes.append(f"alert понижен до watch: {block}")
 
     return evaluation
+
+
+def escalate_with_context(cfg: Config, evaluation: CycleEvaluation, *,
+                          coverage_blocks: bool = False) -> bool:
+    """Повысить `watch` до `alert` по СИЛЬНОМУ независимому подтверждению.
+
+    Отдельный шаг, а не часть `evaluate_cycle`, потому что сильное подтверждение
+    физически приходит позже самой оценки: обстановка окна (среда MIRI, смены лота)
+    собирается только для СРАБОТАВШИХ циклов — то есть уже зная, что цикл сработал.
+    Внутри `_corroborate` ранга `strong` не бывает и быть не может: вторая карта той
+    же метрики подтверждением не является, а другая метрика того же контура даёт
+    только `moderate`.
+
+    Три условия, каждое обязательное и каждое проверяется здесь, а не у вызывающего:
+
+    1. **Ранг strong.** `moderate` до `alert` не поднимает — это неподвижное правило
+       (`docs/METHODOLOGY.md` §6).
+    2. **Покрытие конверта не просело.** Падение покрытия означает, что под вопросом
+       сама опора — состав пациенток или дрейф модели (§4). Пока это не разобрано,
+       эскалация запрещена, а `watch` остаётся.
+    3. **Гейт alert открыт.** Боевое окружение, выполненная калибровка, совпадение
+       окружения калибровки с текущим — `config.alert_block_reason()`.
+
+    Возвращает True, если уровень действительно поднялся. Идемпотентна: повторный
+    вызов на уже поднятой тревоге ничего не делает.
+    """
+    if (evaluation.level != LEVEL_WATCH
+            or evaluation.corroboration_rank != RANK_STRONG):
+        return False
+    if coverage_blocks:
+        evaluation.notes.append(
+            "эскалация до alert заблокирована: покрытие конверта значимо ниже "
+            "опорного — сначала разбирается состав пациенток и дрейф модели (§4)")
+        return False
+    block = cfg.alert_block_reason()
+    if block:
+        evaluation.notes.append(f"alert по сильному подтверждению недоступен: {block}")
+        return False
+    evaluation.level = LEVEL_ALERT
+    evaluation.notes.append(
+        "повышено до alert по быстрому маршруту: сработала карта и есть "
+        "сильное независимое подтверждение")
+    return True
+
+
+# Колонки карточки, которые отложенная доводка имеет право переписать. Список
+# закрытый и короткий намеренно: всё остальное в записанной карточке — то, что
+# система думала В МОМЕНТ ОЦЕНКИ, и переписывать это значило бы подделывать
+# собственную историю.
+UPGRADABLE = ("level", "corroboration", "corroboration_rank", "miri_status",
+              "upgraded_at", "notes")
+
+
+def deferred_upgrades(cfg: Config, clinic: Clinic, frame: pd.DataFrame,
+                      alerts: pd.DataFrame, *,
+                      coverage_blocks: bool = False) -> tuple[pd.DataFrame, list[dict]]:
+    """Второй такт по среде: доводка карточек, выписанных до появления логов.
+
+    Зачем это существует. Обстановка окна физически приходит ПОЗЖЕ оценки: цикл
+    закрывается на T+6, а выгрузка логов инкубатора приезжает недельной нарезкой и
+    его окно ещё не покрывает. Карточка выписывается с `miri_status=pending`, цикл
+    попадает в `already_evaluated` и больше не пересматривается никогда. Следствие
+    измерено на этой площадке: маршрут `watch -> alert` по сильному подтверждению
+    не сработал ни разу за всю историю (`escalated_by_context: 0`), хотя система
+    ровно ради него и строилась. Обещание «обогащение может повысить watch → alert»
+    было невыполнимым по устройству, а не по обстоятельствам.
+
+    Что здесь разрешено — и это весь список:
+
+    * поднять `watch` до `alert`, если обстановка окна оказалась необычной на фоне
+      когорты и все три гейта эскалации открыты;
+    * записать ставший известным `miri_status` — это факт, а не решение.
+
+    Что запрещено и чего здесь нет: создавать тревогу (карточки берутся только из
+    уже записанных), снижать уровень, трогать состояние карт (карта секвенциальна,
+    второй проход по циклу сдвинул бы её дважды) и переписывать что-либо кроме
+    `UPGRADABLE`. Доводка идёт только в инкрементальном прогоне: `--replay`
+    пересобирает журнал с нуля, уже зная всю обстановку.
+
+    Возвращает (журнал, список произведённых повышений).
+    """
+    from . import confounders  # noqa: PLC0415
+
+    if alerts.empty or "miri_status" not in alerts:
+        return alerts, []
+    waiting = alerts.loc[(alerts["level"] == LEVEL_WATCH)
+                         & (alerts["miri_status"] == confounders.STATUS_PENDING)]
+    if waiting.empty:
+        return alerts, []
+
+    thresholds_env, _ = confounders.load_baseline(cfg, clinic)
+    subset = frame.loc[frame["cycle_uid"].isin(set(waiting["cycle_uid"]))]
+    if subset.empty:
+        return alerts, []
+    contexts = confounders.collect(cfg, clinic, subset)
+
+    alerts = alerts.copy()
+    for column in ("upgraded_at", "notes"):
+        if column not in alerts:
+            alerts[column] = ""
+    block = cfg.alert_block_reason()
+    stamp = datetime.now().isoformat(timespec="seconds")
+    upgrades: list[dict] = []
+
+    for index, row in waiting.iterrows():
+        context = contexts.get(row["cycle_uid"])
+        if context is None or context.miri_status == confounders.STATUS_PENDING:
+            continue    # логи всё ещё не покрыли окно — ждём следующей выгрузки
+        # Статус пишется в любом случае, в том числе `unavailable`. Иначе карточка
+        # с окном, которое выгрузки уже не догонят, осталась бы в `pending` навсегда
+        # и проверялась бы на каждом прогоне до конца времён.
+        alerts.at[index, "miri_status"] = context.miri_status
+        if (context.miri_status != confounders.STATUS_ENRICHED
+                or not thresholds_env or not context.is_unusual(thresholds_env)):
+            continue
+
+        detail = (f"критических минут {context.critical_minutes:.0f}, "
+                  f"смен лота {context.lot_changes}")
+        try:
+            corroboration = json.loads(row.get("corroboration") or "[]")
+        except (TypeError, ValueError):
+            corroboration = []
+        corroboration.append({"type": "unusual_window", "detail": detail,
+                              "found_at": stamp})
+        alerts.at[index, "corroboration"] = json.dumps(corroboration,
+                                                       ensure_ascii=False)
+        alerts.at[index, "corroboration_rank"] = RANK_STRONG
+        alerts.at[index, "upgraded_at"] = stamp
+
+        reason = ("эскалация до alert заблокирована: покрытие проспективного "
+                  "конверта значимо ниже опорного (§4)" if coverage_blocks
+                  else f"alert по сильному подтверждению недоступен: {block}"
+                  if block else "")
+        previous = str(row.get("notes") or "")
+        if reason:
+            note = f"обстановка окна разобрана {stamp[:10]}: {detail}; {reason}"
+        else:
+            alerts.at[index, "level"] = LEVEL_ALERT
+            note = (f"повышено до alert отложенной доводкой {stamp[:10]}: карта "
+                    f"сработала, обстановка окна необычна ({detail})")
+            upgrades.append({"cycle_uid": row["cycle_uid"], "detail": detail,
+                             "raised_at": row.get("raised_at")})
+        alerts.at[index, "notes"] = f"{previous} | {note}".strip(" |")
+
+    return alerts, upgrades
 
 
 def _corroborate(cfg: Config, evaluation: CycleEvaluation,
@@ -380,7 +530,15 @@ def apply_evaluations(cfg: Config, clinic: Clinic, frame: pd.DataFrame,
     гейта окружения (просело покрытие конверта, §4 методологии). Карты обновляются
     как обычно; меняется только уровень: alert остаётся watch, причина пишется.
     """
+    if "checkpoint" not in frame.columns:
+        return []
     closed = frame.loc[frame["checkpoint"] == "closure"].copy()
+    if closed.empty:
+        # Ранний выход, а не «пустая сортировка»: кадр без единого цикла приходит
+        # без колонки closure_due вовсе (её дописывает load_from_teable только
+        # непустому кадру), и сортировка по ней упала бы с KeyError на первом же
+        # прогоне новой клиники. Нечего оценивать — это результат, а не сбой.
+        return []
     if already_evaluated:
         # Цикл оценивается ОДИН раз. Повторная подача сдвинула бы карту повторно
         # тем же свидетельством, а тревога появилась бы заново с новой датой.

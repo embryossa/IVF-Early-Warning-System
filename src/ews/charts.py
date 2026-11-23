@@ -133,9 +133,12 @@ class CusumRunner:
     last_zero_index: int = 0
     watch_episodes: int = 0
     alert_signals: int = 0
-    # Значение статистики в момент пересечения h_alert — до перезапуска. Нужно
-    # панели и пику: после сброса в траекторию попадает 0, и пересечение исчезает.
-    crossing_value: float | None = None
+    # Значение, ДОСТИГНУТОЕ последним шагом, до возможного обнуления по alert.
+    # Отдельное поле нужно ровно потому, что `statistic` после сигнала равна нулю:
+    # читающий её код получал бы 0.0 как «величину, на которой сработала карта», и
+    # в карточке тревоги оказывалось бы число, опровергающее саму тревогу. Пик и
+    # траектория обязаны видеть экскурсию, а не её последствие.
+    attained: float = 0.0
 
     def step(self, outcome: float, expected: float, odds_ratio: float,
              h_watch: float | None, h_alert: float | None) -> str | None:
@@ -143,14 +146,13 @@ class CusumRunner:
         self.statistic = max(0.0, self.statistic
                              + outcome * np.log(odds_ratio)
                              - np.log(1.0 - p + odds_ratio * p))
+        self.attained = self.statistic
         self.observations += 1
         if self.statistic == 0.0:
             self.last_zero_index = self.observations
 
-        self.crossing_value = None
         if h_alert is not None and self.statistic > h_alert:
             self.alert_signals += 1
-            self.crossing_value = self.statistic
             self.statistic = 0.0
             self.above_watch = False
             self.last_zero_index = self.observations
@@ -183,14 +185,13 @@ class CusumRunner:
         weight = (successes * np.log(odds_ratio)
                   - trials * np.log(1.0 - p + odds_ratio * p))
         self.statistic = max(0.0, self.statistic + weight)
+        self.attained = self.statistic
         self.observations += int(trials)
         if self.statistic == 0.0:
             self.last_zero_index = self.observations
 
-        self.crossing_value = None
         if h_alert is not None and self.statistic > h_alert:
             self.alert_signals += 1
-            self.crossing_value = self.statistic
             self.statistic = 0.0
             self.above_watch = False
             self.last_zero_index = self.observations
@@ -250,6 +251,14 @@ def simulate_event_rates(p_true_sampler, p_chart: float, odds_ratio: float,
     watch = np.zeros(replicates)
     alert = np.zeros(replicates)
     sizes = None if block_sizes is None or len(block_sizes) == 0 else np.asarray(block_sizes)
+    if sizes is not None and not (sizes > 0).any():
+        # Цикл набора наблюдений отбрасывает неположительные размеры и берёт
+        # следующий; если положительных нет вовсе, он не закончится никогда. Молчаливое
+        # зависание здесь — худший исход из возможных: задача планировщика упрётся в
+        # двухчасовой лимит и отчитается как «модель считает долго».
+        raise ValueError(
+            "block_sizes не содержит ни одного положительного размера цикла — "
+            "калибровать не на чем (знаменатели <= 0 наблюдением не являются)")
 
     for index in range(replicates):
         p_true = float(p_true_sampler(rng))

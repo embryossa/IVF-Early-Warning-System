@@ -31,6 +31,25 @@ CHECKPOINT_CHOICES = [
     {"name": "— не наступил", "color": "grayLight1"},
 ]
 
+RUN_MODE_CHOICES = [
+    {"name": "суточный", "color": "blueLight1"},
+    {"name": "недельный", "color": "purpleLight1"},
+]
+
+# Кто запустил прогон. Различать обязательно: «вручную» объясняет прогон в
+# неурочное время, а отсутствие записи «по расписанию» за день — единственный
+# признак того, что задача планировщика не сработала вовсе.
+RUN_TRIGGER_CHOICES = [
+    {"name": "по расписанию", "color": "greenLight1"},
+    {"name": "вручную", "color": "grayLight1"},
+]
+
+RUN_RESULT_CHOICES = [
+    {"name": "успех", "color": "greenLight1"},
+    {"name": "с пропусками", "color": "yellowLight1"},
+    {"name": "сбой", "color": "redLight1"},
+]
+
 
 def txt():
     return {"type": "singleLineText"}
@@ -166,8 +185,40 @@ def _sync_fields(tz: str) -> list[dict]:
     ]
 
 
+def _runs_fields(tz: str) -> list[dict]:
+    """Журнал прогонов: жив ли конвейер, видно из базы, а не только с диска.
+
+    `Sync` отвечает на другой вопрос — сколько строк приехало из листа. Он молчит
+    о том, дошёл ли прогон до оценки, что он решил и запускался ли вообще: при
+    недоступном Teable синхронизация не запишет даже себя. Поэтому журнал прогонов
+    отдельный, и пишется он последним — когда уже известен итог всей цепочки.
+
+    Смысл в том, чтобы владелец видел работу системы там же, где данные, а не в
+    JSON на диске лабораторной машины. Отсутствие записи «по расписанию» за
+    сегодня — сигнал сам по себе.
+    """
+    return [
+        f("Прогон", txt()),                # run id, он же первичный ключ
+        f("Начат", date(withtime=True, tz=tz)),
+        f("Режим", sel(RUN_MODE_CHOICES)),
+        f("Запуск", sel(RUN_TRIGGER_CHOICES)),
+        f("Итог", sel(RUN_RESULT_CHOICES)),
+        f("Длительность, с", num(1)),
+        f("Шагов успешно", num(0)),
+        f("Мягко пропущено", num(0)),
+        f("Циклов оценено", num(0)),
+        f("watch", num(0)),
+        f("alert", num(0)),
+        f("Гейт alert", txt()),
+        f("Площадка", txt()),
+        f("Окружение", sel(ENV_CHOICES)),
+        f("Замечания", longtxt()),
+    ]
+
+
 def schema(tz: str = "Asia/Tashkent") -> list[dict]:
     return [
         {"key": "OPU", "name": "OPU — мастер циклов", "fields": _opu_fields(tz)},
         {"key": "Sync", "name": "Sync — журнал синхронизаций", "fields": _sync_fields(tz)},
+        {"key": "Runs", "name": "Runs — журнал прогонов", "fields": _runs_fields(tz)},
     ]

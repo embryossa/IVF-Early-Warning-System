@@ -678,10 +678,76 @@ ACTION_LABEL = {
 }
 
 
+JOURNAL_FIELDS = ("alert_id", "cycle_uid", "raised_at", "level", "chart",
+                  "action", "verdict", "miri_status", "raised_in", "upgraded_at",
+                  "contour", "corroboration_rank", "notes")
+
+
+def _journal_rows(journal) -> list[dict]:
+    """Накопленный журнал тревог, свежие первыми.
+
+    Принимает кадр `ews_alerts.csv` (в том числе старого поколения, без колонок
+    `raised_in` и `upgraded_at`) и приводит его к одному виду. Отсутствующая
+    колонка даёт пустую строку, а не падение: панель обязана собраться на любом
+    журнале, который лежит на диске, — иначе один устаревший файл лишает
+    лабораторию отчёта целиком.
+    """
+    if journal is None or getattr(journal, "empty", True):
+        return []
+    rows = []
+    for _, record in journal.iterrows():
+        row = {}
+        for field in JOURNAL_FIELDS:
+            value = record.get(field, "")
+            row[field] = "" if value is None or pd.isna(value) else str(value)
+        rows.append(row)
+    rows.sort(key=lambda r: r["raised_at"], reverse=True)
+    return rows
+
+
+def _journal_table(rows: list[dict], today: set) -> str:
+    """Таблица карточек журнала. Происхождение обязательно: `--replay` говорит, что
+    система сказала БЫ, зная всю историю; ранним обнаружением это не является."""
+    out = ['<div class="scroll"><table style="min-width:1080px"><tr><th>дата закрытия</th>'
+           '<th>уровень</th><th>карта</th><th style="min-width:300px">что это значит</th>'
+           '<th>контур</th><th>подтверждение</th><th>среда</th>'
+           '<th>происхождение</th><th>id</th><th>cycle_uid</th></tr>']
+    for row in rows:
+        miri = {"pending": "ожидается", "unavailable": "нет выгрузки",
+                "enriched": "разобрана"}.get(row["miri_status"], row["miri_status"])
+        label, css = ACTION_LABEL.get(row["action"], (row["action"], "muted"))
+        css_class = {"alert": "lvl-alert", "watch": "lvl-watch"}.get(css, "muted")
+        origin = ("реконструкция" if row["raised_in"] == "replay"
+                  else "прогон" if row["raised_in"] else "—")
+        origin_css = ' class="muted"' if row["raised_in"] == "replay" else ''
+        upgraded = (f'<div class="muted" style="font-size:12px">доведено средой '
+                    f'{escape(row["upgraded_at"][:10])}</div>'
+                    if row["upgraded_at"] else "")
+        notes = (f'<div class="muted" style="font-size:12px">{escape(row["notes"])}</div>'
+                 if row["notes"] else "")
+        mark = ' style="font-weight:600"' if row["cycle_uid"] in today else ''
+        out.append(
+            f"<tr{mark}><td>{escape(row['raised_at'])}</td>"
+            f"<td>{_level_cell(row['level'])}</td>"
+            f"<td><b>{escape(row['chart'])}</b></td>"
+            f'<td><span class="{css_class}">{escape(label)}</span>'
+            f'<div class="muted" style="font-size:12px">'
+            f'{escape(row["verdict"])}</div>{upgraded}{notes}</td>'
+            f'<td class="muted">{escape(CONTOUR_RU.get(row["contour"], row["contour"]))}</td>'
+            f'<td class="muted">{escape(row["corroboration_rank"])}</td>'
+            f'<td class="muted">{escape(miri)}</td>'
+            f'<td{origin_css}>{origin}</td>'
+            f'<td class="muted">{escape(row["alert_id"])}</td>'
+            f'<td class="muted">{escape(row["cycle_uid"])}</td></tr>')
+    out.append("</table></div>")
+    return "".join(out)
+
+
 def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
            states: dict, baselines: dict, thresholds: dict, path: Path,
            literature=None, outcome_windows=None, outcome_note: str = "",
-           envelope_qc=None, coverage_note: str = "", outcome_ra=None,
+           envelope_qc=None, coverage_note: str = "",
+           coverage_blocked: bool = False, outcome_ra=None,
            alerts_journal=None) -> Path:
     environment = cfg.environment
     block = cfg.alert_block_reason()
@@ -697,7 +763,12 @@ def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
         f"<title>EWS — {escape(clinic.name)}</title>",
         f"<style>{STYLE}</style>", '<div class="wrap">',
         f"<h1>Раннее предупреждение — {escape(clinic.name)} {badge}</h1>",
+        # Площадка — в подзаголовке рядом с датой. Когда обе машины работают на
+        # боевых данных, значок окружения их не различает, а доверие к средовой
+        # части отчёта зависит именно от площадки: свежие логи инкубатора есть
+        # только в лаборатории.
         f'<div class="sub">собрано {datetime.now():%Y-%m-%d %H:%M} · '
+        f'площадка {escape(cfg.site)} · '
         f'циклов {len(frame.data)} · оценено на закрытии {len(evaluations)}</div>',
     ]
 
@@ -809,10 +880,15 @@ def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
         parts.append('<div class="card scroll"><table><tr><th>стадия</th>'
                      '<th class="num">n</th><th class="num">покрытие</th>'
                      '<th class="num">опорное</th><th class="num">разница, пп</th>'
+                     '<th class="num">проспективных</th>'
+                     '<th class="num">покрытие<br>проспективных</th>'
                      '<th class="num">MAE P50</th>'
                      '<th class="num">вырожденных</th></tr>')
         for _, row in envelope_qc.iterrows():
             delta = row.get("delta_pp")
+            coverage_forward = row.get("coverage_prospective")
+            forward = ("—" if coverage_forward is None or pd.isna(coverage_forward)
+                       else f"{float(coverage_forward):.3f}")
             css = "" if delta is None else (
                 ' class="num lvl-watch"' if delta < -5 else ' class="num"')
             parts.append(
@@ -821,17 +897,31 @@ def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
                 f'<td class="num">{row["coverage"]:.3f}</td>'
                 f'<td class="num">{row["baseline"] if row["baseline"] else "—"}</td>'
                 f'<td{css}>{f"{delta:+.1f}" if delta is not None else "—"}</td>'
+                f'<td class="num muted">{row.get("n_prospective") or 0}</td>'
+                f'<td class="num">{forward}</td>'
                 f'<td class="num">{row["mae_p50"]}</td>'
                 f'<td class="num muted">{row["degenerate_share"]:.0%}</td></tr>')
         parts.append("</table></div>")
-        note = (f'<b>Покрытие просело.</b> {escape(coverage_note)}' if coverage_note
-                else 'Модель хорошо предсказывает <b>счёт</b> и не предсказывает '
-                     '<b>долю</b>, поэтому конверт работает здесь — как независимая '
-                     'проверка «попал ли факт в предсказанное», — и не работает как '
-                     'риск-коррекция карт. Тревог этот слой не поднимает.')
+        # Три разных состояния, и путать их нельзя: покрытие просело; покрытие
+        # проверено и чисто; проверять пока нечем. Раньше вторая и третья строка
+        # выглядели одинаково, а первая печаталась по любому непустому тексту.
+        if coverage_blocked:
+            note = f'<b>Покрытие просело.</b> {escape(coverage_note)}'
+        elif coverage_note:
+            note = f'<b>Гейт покрытия молчит не в вашу пользу.</b> {escape(coverage_note)}'
+        else:
+            note = ('Модель хорошо предсказывает <b>счёт</b> и не предсказывает '
+                    '<b>долю</b>, поэтому конверт работает здесь — как независимая '
+                    'проверка «попал ли факт в предсказанное», — и не работает как '
+                    'риск-коррекция карт. Тревог этот слой не поднимает.')
         parts.append(f'<div class="note">{note}</div>')
+        parts.append('<div class="note">Эскалацию до <b>alert</b> блокирует '
+                     'просадка покрытия <b>проспективных</b> конвертов — только они '
+                     'были прогнозом. Ретроспективный добор показан в общей колонке '
+                     '«покрытие»: он нужен аудиту модели, но запирать им тревогу '
+                     'нельзя — модель обучалась в том числе на этих циклах.</div>')
 
-    # --- журнал тревог ---
+    # --- тревоги этого прогона ---
     raised = [e for e in evaluations if e.level != "ok"]
     parts.append(f"<h2>Тревоги этого прогона ({len(raised)})</h2>")
     if not raised:
@@ -859,6 +949,37 @@ def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
                 f'<td class="muted">{escape(miri)}</td>'
                 f'<td class="muted">{escape(item.cycle_uid)}</td></tr>')
         parts.append("</table></div>")
+
+    # --- журнал за 90 дней: при инкрементальном прогоне выше видны только новые ---
+    # Журнал НАКОПЛЕННЫЙ (ews_alerts.csv), а не тревоги прогона: в суточном режиме
+    # оценивается 0-1 цикл, и панель иначе печатала бы «тревог нет» при карточках
+    # в файле. Происхождение обязательно: `--replay` говорит, что система сказала
+    # БЫ, зная всю историю; ранним обнаружением это не является.
+    entries = _journal_rows(alerts_journal)
+    today = {e.cycle_uid for e in raised}
+    if not entries:
+        parts.append("<h2>Журнал за 90 дней (0)</h2>")
+        parts.append('<div class="card muted">Тревог нет за всё время наблюдения.</div>')
+    else:
+        horizon = pd.Timestamp(datetime.now()) - pd.Timedelta(days=90)
+        stamps = [pd.to_datetime(row["raised_at"], errors="coerce") for row in entries]
+        recent = [row for row, at in zip(entries, stamps) if pd.notna(at) and at >= horizon]
+        older = [row for row, at in zip(entries, stamps) if not (pd.notna(at) and at >= horizon)]
+        forward = sum(1 for row in entries if row["raised_in"] != "replay")
+        parts.append(f"<h2>Журнал за 90 дней ({len(recent)})</h2>")
+        parts.append(f'<div class="sub">всего в журнале {len(entries)} · '
+                     f'проспективно за всё время: {forward} из {len(entries)} '
+                     f'(остальные восстановлены прогоном --replay)</div>')
+        if recent:
+            parts.append(_journal_table(recent, today))
+        else:
+            parts.append('<div class="card muted">За 90 дней записей нет.</div>')
+        # Старые карточки не выбрасываются: журнал — история разборов, и тревога
+        # полугодовой давности остаётся фактом. Свёрнуто, чтобы не заслонять свежее.
+        if older:
+            parts.append(f'<details class="card"><summary>Ранее ({len(older)})</summary>'
+                         f'{_journal_table(older, today)}</details>')
+    if raised or entries:
         parts.append('<div class="note"><b>«Тренд» — не провал и не повод разбирать '
                      'протокол.</b> Он означает, что лаборатория изменилась относительно '
                      'СВОЕЙ истории, оставаясь в пределах консенсуса и литературного '
@@ -866,37 +987,11 @@ def render(cfg: Config, clinic: Clinic, frame, evaluations: list,
                      'стимуляция либо пришли более сложные пациентки. Разбор протокола '
                      'оправдан только когда просадка совпала с выходом за уровень '
                      'компетентности.</div>')
-        parts.append('<div class="note">Пустое поле среды означает «логи ещё не '
+        parts.append('<div class="note">Среда «ожидается» означает «логи ещё не '
                      'выгружены», а не «нарушений инкубации не было». Выгрузка '
-                     'приходит раз в 7 дней и дописывается отдельным проходом.</div>')
-
-    # --- журнал за 90 дней: при инкрементальном прогоне выше видны только новые ---
-    if alerts_journal is not None and not alerts_journal.empty:
-        recent = alerts_journal.copy()
-        recent["_date"] = pd.to_datetime(recent["raised_at"], errors="coerce")
-        recent = recent.loc[recent["_date"] >= pd.Timestamp(datetime.now()) - pd.Timedelta(days=90)]
-        recent = recent.sort_values("_date", ascending=False)
-        parts.append(f"<h2>Журнал за 90 дней ({len(recent)})</h2>")
-        if recent.empty:
-            parts.append('<div class="card muted">За 90 дней записей нет.</div>')
-        else:
-            parts.append('<div class="card scroll"><table><tr><th>дата закрытия</th>'
-                         '<th>уровень</th><th>карта</th><th>контур</th><th>подтверждение</th>'
-                         '<th>среда</th><th>примечание</th><th>cycle_uid</th></tr>')
-            for _, row in recent.iterrows():
-                notes = "" if pd.isna(row.get("notes")) else str(row["notes"])
-                miri = {"pending": "ожидается", "unavailable": "нет выгрузки",
-                        "enriched": "разобрана"}.get(row.get("miri_status"), row.get("miri_status"))
-                parts.append(
-                    f"<tr><td>{escape(str(row['raised_at']))}</td>"
-                    f"<td>{_level_cell(str(row['level']))}</td>"
-                    f"<td><b>{escape(str(row['chart']))}</b></td>"
-                    f"<td class=\"muted\">{escape(CONTOUR_RU.get(str(row.get('contour')), str(row.get('contour'))))}</td>"
-                    f"<td class=\"muted\">{escape(str(row.get('corroboration_rank')))}</td>"
-                    f"<td class=\"muted\">{escape(str(miri))}</td>"
-                    f"<td class=\"muted\" style=\"font-size:12px\">{escape(notes)}</td>"
-                    f"<td class=\"muted\">{escape(str(row['cycle_uid']))}</td></tr>")
-            parts.append("</table></div>")
+                     'приходит раз в 7 дней; когда она покрывает окно, недельный '
+                     'проход возвращается к карточке и может поднять её до alert — '
+                     'снизить уровень или снять тревогу он не может.</div>')
 
     # --- медленный контур ---
     if outcome_windows:

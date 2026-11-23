@@ -19,6 +19,7 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
+import re
 import sys
 
 import pandas as pd
@@ -39,21 +40,134 @@ def _write_csv(frame: pd.DataFrame, path: Path) -> None:
     tmp.replace(path)
 
 
+CHECKPOINT_COLUMNS = ["cycle_uid", "checkpoint", "date_opu", "closure_due"]
+
+# Колонки карточки тревоги. Заданы списком, а не выведены из строк: пустой кадр без
+# колонок пишется в CSV БЕЗ ЗАГОЛОВКА, и следующий прогон падает на нём с
+# EmptyDataError. Это самый обычный путь здоровой лаборатории — сегодня тревог нет,
+# завтра тоже, — поэтому заголовок обязан стоять всегда.
+ALERT_COLUMNS = [
+    "alert_id", "cycle_uid", "raised_at", "level", "chart", "statistic",
+    "expected_source", "contour", "corroboration", "corroboration_rank",
+    "miri_status", "action", "verdict", "notes", "environment",
+    # Происхождение карточки. Без неё журнал непригоден для того единственного,
+    # ради чего его ведут: судить о результативности ПРОСПЕКТИВНОГО отслеживания.
+    # `--replay` реконструирует, что система сказала БЫ, зная всю историю; такая
+    # карточка доказательством раннего обнаружения не является и стоять рядом с
+    # реальным срабатыванием без пометки не может.
+    "raised_in",
+    # Когда карточку довела обстановка окна (evaluate.deferred_upgrades). Пусто —
+    # доводки не было: обычный и самый частый случай.
+    "upgraded_at",
+]
+
+RAISED_IN_RUN = "прогон"
+RAISED_IN_REPLAY = "replay"
+
+
+def read_alerts(path: Path) -> pd.DataFrame:
+    """Прошлый журнал тревог. Отсутствующий и пустой — одно и то же: тревог не было.
+
+    Отдельная функция ради одного: файл без заголовка (его оставляли прошлые версии,
+    записывая кадр без колонок) роняет `read_csv` с `EmptyDataError`. Уронить из-за
+    этого прогон значило бы потерять сегодняшнюю оценку из-за вчерашнего пустого
+    файла — обмен, которого делать нельзя.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame(columns=ALERT_COLUMNS)
+    try:
+        return pd.read_csv(path, encoding="utf-8-sig")
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=ALERT_COLUMNS)
+
+
+def next_alert_number(previous: pd.DataFrame, clinic_code: str) -> int:
+    """С какого номера продолжать нумерацию карточек.
+
+    Раньше номер брался из позиции цикла в списке оценок ЭТОГО прогона. В
+    инкрементальном режиме список каждый день начинается заново, поэтому счётчик
+    сбрасывался на 1: в журнале уже лежат две разные карточки `two_line-00001`.
+    Идентификатор, который не идентифицирует, хуже отсутствующего — на него
+    ссылаются в разборе. Номер продолжается от максимума, который уже есть в файле.
+    """
+    if previous.empty or "alert_id" not in previous:
+        return 1
+    numbers = (previous["alert_id"].astype(str)
+               .str.extract(rf"^{re.escape(clinic_code)}-(\d+)$", expand=False)
+               .dropna().astype(int))
+    return int(numbers.max()) + 1 if not numbers.empty else 1
+
+
+CARD_KEY = ["cycle_uid", "chart", "raised_at"]
+
+
+def carry_over(alerts: pd.DataFrame, existing: pd.DataFrame) -> pd.DataFrame:
+    """Перенести на пересобранный журнал то, что пересборке не подлежит.
+
+    `--replay` пересчитывает историю заново и пишет журнал с нуля. Две вещи при
+    этом обязаны пережить пересборку, потому что они не вычисляются из данных, а
+    являются фактами о прошлом системы:
+
+    * **происхождение.** Карточка, поднятая живым прогоном 18.08, останется
+      поднятой живым прогоном, сколько бы раз мы ни пересобирали историю. Без
+      переноса replay отмывал бы реальные срабатывания в «реконструкции» и стирал
+      единственное свидетельство о результативности проспективного контура —
+      ровно то, ради чего колонка и заведена.
+    * **идентификатор.** На него ссылается разбор; id, меняющийся при каждой
+      пересборке, ссылкой быть не может.
+
+    Карточки, которых в старом журнале не было, сохраняют свежие номера: они
+    выданы от максимума старого файла и с перенесёнными не сталкиваются.
+    """
+    if existing.empty or alerts.empty:
+        return alerts
+
+    def text(value) -> str:
+        # Пустая ячейка CSV читается как NaN, а NaN истинен: `str(nan or "")` дал бы
+        # "nan", и каждая перенесённая карточка получала бы несуществующую доводку.
+        return "" if value is None or pd.isna(value) else str(value)
+
+    known = {}
+    for _, row in existing.iterrows():
+        key = tuple(str(row.get(field, "")) for field in CARD_KEY)
+        known[key] = (text(row.get("alert_id")),
+                      text(row.get("raised_in")),
+                      text(row.get("upgraded_at")))
+    alerts = alerts.copy()
+    for index, row in alerts.iterrows():
+        found = known.get(tuple(str(row.get(field, "")) for field in CARD_KEY))
+        if not found:
+            continue
+        alert_id, raised_in, upgraded_at = found
+        if alert_id:
+            alerts.at[index, "alert_id"] = alert_id
+        if raised_in:
+            alerts.at[index, "raised_in"] = raised_in
+        if upgraded_at:
+            alerts.at[index, "upgraded_at"] = upgraded_at
+    return alerts
+
+
 def checkpoints_frame(frame: pd.DataFrame, environment: str) -> pd.DataFrame:
-    out = frame[["cycle_uid", "checkpoint", "date_opu", "closure_due"]].copy()
+    # reindex, а не индексация списком: у кадра без циклов нет колонки closure_due
+    # (её дописывает только непустой путь load_from_teable), и обычная выборка
+    # упала бы с KeyError вместо того, чтобы записать пустой артефакт.
+    out = frame.reindex(columns=CHECKPOINT_COLUMNS).copy()
     out["recorded_at"] = datetime.now().isoformat(timespec="seconds")
     out["environment"] = environment
     return out
 
 
-def alerts_frame(evaluations: list, environment: str, clinic_code: str) -> pd.DataFrame:
+def alerts_frame(evaluations: list, environment: str, clinic_code: str, *,
+                 start: int = 1, raised_in: str = RAISED_IN_RUN) -> pd.DataFrame:
     rows = []
-    for index, item in enumerate(evaluations, start=1):
+    number = start
+    for item in evaluations:
         if item.level == evaluate.LEVEL_OK:
             continue
         triggered = {m: c for m, c in item.charts.items() if c.get("crossed")}
         rows.append({
-            "alert_id": f"{clinic_code}-{index:05d}",
+            "alert_id": f"{clinic_code}-{number:05d}",
             "cycle_uid": item.cycle_uid,
             "raised_at": (item.closure_date.date().isoformat()
                           if pd.notna(item.closure_date) else ""),
@@ -71,8 +185,11 @@ def alerts_frame(evaluations: list, environment: str, clinic_code: str) -> pd.Da
             "verdict": item.verdict_summary,
             "notes": " | ".join(item.notes),
             "environment": environment,
+            "raised_in": raised_in,
+            "upgraded_at": "",
         })
-    return pd.DataFrame(rows)
+        number += 1
+    return pd.DataFrame(rows, columns=ALERT_COLUMNS)
 
 
 def outcome_ra_step(cfg, clinic, data: pd.DataFrame, data_dir: Path,
@@ -198,6 +315,11 @@ def main() -> int:
                   f"вырожденных {row['degenerate_share']:.0%}")
         if coverage_dropped:
             print(f"  [!] {coverage_note}")
+        elif coverage_note:
+            # Гейт молчит не потому, что всё хорошо, а потому что проспективных
+            # конвертов ещё мало. Отсутствие свидетельства — не свидетельство, и
+            # в логе это должно читаться иначе, чем чистая проверка.
+            print(f"  [ ] {coverage_note}")
 
     # Литературный контур: третья опора, независимая от нашей истории.
     literature = prior.gap_table(frame.data, amh_constant=clinic.amh_constant)
@@ -214,8 +336,7 @@ def main() -> int:
                                              already_evaluated=evaluated,
                                              escalation_block=escalation_block)
 
-    levels = pd.Series([item.level for item in evaluations]).value_counts().to_dict()
-    print(f"оценено закрытых циклов: {len(evaluations)}  итоги: {levels or '—'}")
+    print(f"оценено закрытых циклов: {len(evaluations)}")
 
     sources: dict[str, int] = {}
     for item in evaluations:
@@ -229,6 +350,7 @@ def main() -> int:
     # «необычного» берутся из базы, которую пересчитывает недельный проход.
     raised = [item for item in evaluations if item.level != evaluate.LEVEL_OK]
     thresholds_env, baseline_note = confounders.load_baseline(cfg, clinic)
+    escalated: list[str] = []
     if raised:
         uids = {item.cycle_uid for item in raised}
         subset = frame.data.loc[frame.data["cycle_uid"].isin(uids)]
@@ -250,8 +372,53 @@ def main() -> int:
                               f"смен лота {context.lot_changes}",
                 })
                 item.corroboration_rank = evaluate.RANK_STRONG
+                # Уровень пересматривается ЗДЕСЬ, а не остаётся тем, каким его
+                # оставила оценка: сильное подтверждение появляется только после
+                # неё, и без этого вызова быстрый маршрут watch -> alert не
+                # выполнялся бы никогда, сколько бы его ни описывали документы.
+                # Просевшее покрытие конверта эскалацию блокирует — там под
+                # вопросом сама опора (§4).
+                if evaluate.escalate_with_context(
+                        cfg, item, coverage_blocks=coverage_dropped):
+                    escalated.append(item.cycle_uid)
+        if escalated:
+            print(f"повышено до alert по сильному подтверждению: {len(escalated)}")
 
-    alerts = alerts_frame(evaluations, cfg.environment, clinic.code)
+    levels = pd.Series([item.level for item in evaluations]).value_counts().to_dict()
+    print(f"итоги оценки: {levels or '—'}")
+
+    # Журнал читается здесь, а не при записи: от него зависят и сквозная нумерация
+    # карточек, и отложенная доводка по среде.
+    alerts_path = data_dir / "ews_alerts.csv"
+    # Старый журнал читается в ОБОИХ режимах, но роли у него разные: в
+    # инкрементальном он дописывается, в replay — только отдаёт номера и
+    # происхождение пересобранным карточкам (см. `carry_over`).
+    existing = read_alerts(alerts_path)
+    previous = pd.DataFrame(columns=ALERT_COLUMNS) if args.replay else existing
+
+    # Второй такт по среде. Только в инкрементальном режиме: replay пересобирает
+    # журнал с нуля, уже зная всю обстановку, и доводить там нечего.
+    upgrades: list[dict] = []
+    if not args.replay and not previous.empty:
+        waiting = int((previous["miri_status"] == "pending").sum())
+        previous, upgrades = evaluate.deferred_upgrades(
+            cfg, clinic, frame.data, previous, coverage_blocks=coverage_dropped)
+        still = int((previous["miri_status"] == "pending").sum())
+        if waiting:
+            print()
+            print(f"отложенная доводка: карточек ждали обстановки {waiting}, "
+                  f"разобрано {waiting - still}, повышено до alert {len(upgrades)}")
+            for item in upgrades:
+                print(f"  {item['raised_at']}  {item['cycle_uid']}  {item['detail']}")
+
+    alerts = alerts_frame(evaluations, cfg.environment, clinic.code,
+                          start=next_alert_number(existing, clinic.code),
+                          raised_in=RAISED_IN_REPLAY if args.replay else RAISED_IN_RUN)
+    if args.replay:
+        alerts = carry_over(alerts, existing)
+        kept = int((alerts["raised_in"] == RAISED_IN_RUN).sum())
+        print(f"пересборка журнала: карточек {len(alerts)}, из них поднятых "
+              f"живым прогоном (происхождение сохранено): {kept}")
     if not alerts.empty:
         print("\nтревоги:")
         for _, row in alerts.iterrows():
@@ -292,14 +459,17 @@ def main() -> int:
         _write_csv(qc_cycles, data_dir / "ews_envelope_qc.csv")
     # Тревоги дописываются, а не переписываются: в инкрементальном прогоне
     # оцениваются только новые циклы, и перезапись стёрла бы весь журнал.
-    alerts_path = data_dir / "ews_alerts.csv"
-    if not args.replay and alerts_path.exists() and not alerts.empty:
-        previous = pd.read_csv(alerts_path, encoding="utf-8-sig")
+    # `keep="first"` сохраняет карточку такой, какой её выписала оценка, — правку
+    # уровня задним числом делает только отложенная доводка, и она правит СТРОКУ
+    # журнала, а не подсовывает вторую с тем же ключом.
+    if not previous.empty:
         alerts = pd.concat([previous, alerts], ignore_index=True)
         alerts = alerts.drop_duplicates(subset=["cycle_uid", "chart", "raised_at"],
                                         keep="first")
-    elif not args.replay and alerts_path.exists() and alerts.empty:
-        alerts = pd.read_csv(alerts_path, encoding="utf-8-sig")
+    # Схема фиксируется явно: старые файлы не знают колонок `raised_in` и
+    # `upgraded_at`, и без reindex порядок колонок зависел бы от того, какого
+    # поколения строки оказались в файле первыми.
+    alerts = alerts.reindex(columns=ALERT_COLUMNS).fillna("")
     _write_csv(alerts, alerts_path)
     evaluated |= {item.cycle_uid for item in evaluations}
     evaluate.save_state(state_path, states, cfg, clinic, evaluated)
@@ -308,8 +478,8 @@ def main() -> int:
     panel.render(cfg, clinic, frame, evaluations, states, baselines, thresholds,
                  panel_path, literature=literature, outcome_windows=outcome_windows,
                  outcome_note=outcome_note, envelope_qc=qc_summary,
-                 coverage_note=coverage_note, outcome_ra=outcome_ra_result,
-                 alerts_journal=alerts)
+                 coverage_note=coverage_note, coverage_blocked=coverage_dropped,
+                 outcome_ra=outcome_ra_result, alerts_journal=alerts)
     if outcome_ra_result is not None:
         outcome_ra.write_artifacts(outcome_ra_result, data_dir, cfg.environment,
                                    cfg.path(cfg.settings["privacy"]["agent_packet_dir"]),
@@ -320,10 +490,23 @@ def main() -> int:
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "clinic": clinic.code,
         "environment": cfg.environment,
+        # Площадка обязана быть в штампе. Когда обе машины работают на боевых
+        # данных, `environment` их уже не различает, а средовая часть отчёта
+        # достоверна только там, где есть свежая выгрузка логов инкубатора.
+        "site": cfg.site,
         "mode": "replay" if args.replay else "incremental",
         "cycles_loaded": len(frame.data),
         "cycles_evaluated": len(evaluations),
         "levels": levels,
+        # Сколько тревог поднялось НЕ по пересечению h_alert, а по сильному
+        # подтверждению обстановкой. Маршрут редкий, и его надо видеть отдельно:
+        # частота alert по калибровке считана только для пересечений порога.
+        "escalated_by_context": len(escalated),
+        # Повышения отложенной доводкой — по циклам, оценённым в ПРОШЛЫХ прогонах.
+        # Отдельно от `escalated_by_context` намеренно: это другой такт и другая
+        # задержка обнаружения, и смешивать их в одном числе значит терять именно
+        # то, что нужно знать о результативности.
+        "upgraded_by_context": len(upgrades),
         "alert_gate": block or "open",
         "outcome_contour": {"verdict": outcome_verdict, "note": outcome_note},
         "outcome_ra": (outcome_ra_result.summary() if outcome_ra_result is not None

@@ -35,6 +35,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .cycles import derived_column, numeric_column
+
 # Индикатор стимулированного цикла в формулах Herasight. У нас все циклы
 # стимулированные, поэтому он всегда 1 — вынесен в константу, чтобы это было видно,
 # а не спрятано в числе.
@@ -98,12 +100,13 @@ def expected_rates(frame: pd.DataFrame,
     остаётся годен; проверка corr не пустит его в риск-коррекцию сама.
     """
     out = pd.DataFrame(index=frame.index)
-    amh = pd.to_numeric(frame.get("amh"), errors="coerce")
+    amh = numeric_column(frame, "amh")
     if amh_constant is not None:
         amh = amh.fillna(float(amh_constant))
-    out["MIIR"] = maturity_rate(frame.get("age"), amh)
-    out["FR"] = fertilisation_rate(frame.get("age"))
-    out["BlR"] = blastulation_rate(frame.get("age"))
+    age = numeric_column(frame, "age")
+    out["MIIR"] = maturity_rate(age, amh)
+    out["FR"] = fertilisation_rate(age)
+    out["BlR"] = blastulation_rate(age)
     return out
 
 
@@ -124,8 +127,8 @@ def gap_table(frame: pd.DataFrame,
     expected = expected_rates(frame, amh_constant=amh_constant)
     rows = []
     for metric, (numerator_col, denominator_col) in PARTS.items():
-        numerator = pd.to_numeric(frame.get(numerator_col), errors="coerce")
-        denominator = pd.to_numeric(frame.get(denominator_col), errors="coerce")
+        numerator = numeric_column(frame, numerator_col)
+        denominator = derived_column(frame, denominator_col)
         prior = expected[metric]
         observable = (numerator.notna() & denominator.notna() & (denominator > 0)
                       & (numerator <= denominator))

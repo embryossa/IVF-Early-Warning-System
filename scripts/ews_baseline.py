@@ -1,6 +1,6 @@
 """Опорные измерения EWS: базовые KPI лаборатории и калибровка конверта.
 
-    python scripts/ews_baseline.py [--clinic-base "Two-Line IVF"] [--out data/baseline]
+    python scripts/ews_baseline.py --clinic <code> [--out data/baseline] [--dry-run]
 
 Два независимых измерения, которые НЕЛЬЗЯ смешивать:
 
@@ -51,8 +51,11 @@ def load_lab_population(cfg, clinic: Clinic,
     ровно то же, что делает /run-analysis соседнего проекта. Колонки резолвятся
     через профиль клиники, а не по фиксированным именам: на другой лаборатории
     выгрузка называет их иначе.
+
+    Токены исключений тоже берутся из профиля клиники (`columns.yaml`), а не из
+    `config/columns.yaml` проекта embryo-lab-data: на автономной машине того
+    проекта нет по замыслу, и чтение оттуда роняло скрипт (docs/LAB_SITE.md §7).
     """
-    import yaml
     from ews.vendor import kpi  # noqa: PLC0415
 
     frame = pd.read_csv(export_path, dtype=str, keep_default_na=False)
@@ -68,9 +71,18 @@ def load_lab_population(cfg, clinic: Clinic,
         print(f"[warn] колонок нет в выгрузке: {', '.join(missing)} — "
               f"метрики, которым они нужны, будут недоступны")
 
-    project_dir = Path(cfg.external("embryo_lab_data")["project_dir"])
-    with (project_dir / "config" / "columns.yaml").open(encoding="utf-8") as fh:
-        columns_cfg = yaml.safe_load(fh)
+    # Отсутствие секции — не «исключать нечего»: пустая маска молча расширит
+    # состав циклов в базовых KPI, а через них сдвинет опорные параметры карт.
+    # Такую подмену нельзя делать по умолчанию, поэтому здесь остановка.
+    if "competency_exclusion" not in clinic.columns:
+        raise ConfigError(
+            f"клиника {clinic.code}: в columns.yaml нет секции competency_exclusion. "
+            f"Без неё маска исключений пуста, состав циклов в базовых KPI шире "
+            f"фактического, и опорные параметры карт окажутся посчитаны не по той "
+            f"популяции. Задайте секцию (образец — config/clinics/_template/"
+            f"columns.yaml); пустые списки допустимы, но должны быть написаны явно."
+        )
+    columns_cfg = clinic.columns
 
     # cycle_uid считается тем же составным ключом и тем же HMAC, что при
     # синхронизации в Teable — иначе конверт не сойдётся с циклом.
@@ -112,7 +124,8 @@ def lab_kpi_baseline(cfg, clinic: Clinic, export_path: Path) -> pd.DataFrame:
     return out
 
 
-def write_incontrol(cfg, clinic: Clinic, export_path: Path, out_dir: Path) -> None:
+def write_incontrol(cfg, clinic: Clinic, export_path: Path, out_dir: Path,
+                    *, dry_run: bool = False) -> None:
     """In-control параметры опорного окна + оговорки о поглощённых сдвигах."""
     from ews.incontrol import as_manifest, build_baselines, caveats  # noqa: PLC0415
 
@@ -235,8 +248,9 @@ def write_incontrol(cfg, clinic: Clinic, export_path: Path, out_dir: Path) -> No
                   f"/ rho {before.get('rho', float('nan')):.3f}   ->   "
                   f"с конвертом {after['pearson_ratio']:5.2f} / rho {after['rho']:.3f}"
                   f"   ({after['n_cycles']} циклов)")
-    (out_dir / "incontrol_parameters.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not dry_run:
+        (out_dir / "incontrol_parameters.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"\nIN-CONTROL ПАРАМЕТРЫ ОПОРНОГО ОКНА "
           f"({start} — {window_cfg.get('end') or 'сейчас'}; "
@@ -343,6 +357,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clinic", help="код профиля из config/clinics/")
     parser.add_argument("--out", help="куда писать; по умолчанию data/<clinic>/baseline")
+    # Опорные параметры — центр относительного контура. Пересчёт на новых данных
+    # сдвигает его, а вместе с ним и смысл уже откалиброванных порогов, поэтому
+    # посмотреть результат, ничего не переписав, обязано быть возможно.
+    parser.add_argument("--dry-run", action="store_true",
+                        help="посчитать и показать, ничего не записывая")
     args = parser.parse_args()
 
     try:
@@ -354,23 +373,33 @@ def main() -> int:
         return 2
 
     out_dir = cfg.path(args.out) if args.out else clinic.data_dir(cfg) / "baseline"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
     divisor = float(cfg.settings["envelope"]["iqr_to_sigma_divisor"])
 
-    print(f"клиника: {clinic.name} ({clinic.code})  окружение: {cfg.environment}\n")
+    print(f"клиника: {clinic.name} ({clinic.code})  окружение: {cfg.environment}")
+    if args.dry_run:
+        print("(dry-run: считаем и показываем, на диск ничего не идёт)")
+    print()
 
     # 1. KPI своей лаборатории + in-control параметры опорного окна
     export_path = cfg.path(cfg.external("google_sheet")["export_path"])
     if export_path.exists():
-        kpi_frame = lab_kpi_baseline(cfg, clinic, export_path)
-        kpi_frame.to_csv(out_dir / "lab_kpi_baseline.csv", index=False, encoding="utf-8-sig")
+        try:
+            kpi_frame = lab_kpi_baseline(cfg, clinic, export_path)
+        except ConfigError as exc:
+            print(f"[!] {exc}")
+            return 2
+        if not args.dry_run:
+            kpi_frame.to_csv(out_dir / "lab_kpi_baseline.csv", index=False,
+                             encoding="utf-8-sig")
         show = [c for c in ("metric", "numerator", "denominator", "rate", "ci_low",
                             "ci_high", "direction", "competency", "benchmark",
                             "status") if c in kpi_frame.columns]
         print(f"БАЗОВЫЕ KPI ЛАБОРАТОРИИ, вся история (n={kpi_frame['population_n'].iloc[0]} "
               f"циклов, исключено {kpi_frame['excluded_n'].iloc[0]}):")
         print(kpi_frame[show].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
-        write_incontrol(cfg, clinic, export_path, out_dir)
+        write_incontrol(cfg, clinic, export_path, out_dir, dry_run=args.dry_run)
     else:
         print(f"[warn] нет экспорта листа {export_path} — базовые KPI пропущены")
 
@@ -385,11 +414,14 @@ def main() -> int:
         return 0
 
     (by_stage, by_clinic), summary = envelope_calibration(qc, divisor)
-    by_stage.to_csv(out_dir / "envelope_coverage_by_stage.csv", index=False, encoding="utf-8-sig")
-    by_clinic.to_csv(out_dir / "envelope_coverage_by_clinic.csv", index=False, encoding="utf-8-sig")
     summary["homogeneity"] = homogeneity_note(by_clinic)
-    (out_dir / "baseline_manifest.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not args.dry_run:
+        by_stage.to_csv(out_dir / "envelope_coverage_by_stage.csv", index=False,
+                        encoding="utf-8-sig")
+        by_clinic.to_csv(out_dir / "envelope_coverage_by_clinic.csv", index=False,
+                         encoding="utf-8-sig")
+        (out_dir / "baseline_manifest.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"\nКАЛИБРОВКА КОНВЕРТА ({summary['observations_total']} наблюдений, "
           f"клиники: {', '.join(summary['clinics'])})")
@@ -403,7 +435,8 @@ def main() -> int:
     print("\n  по клиникам:")
     print(by_clinic.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     print(f"\n  однородность: {summary['homogeneity']}")
-    print(f"\nартефакты: {out_dir}")
+    print(f"\nартефакты: {out_dir}" if not args.dry_run
+          else "\n(dry-run: ничего не записано)")
     return 0
 
 

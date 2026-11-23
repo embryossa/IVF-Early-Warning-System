@@ -68,6 +68,12 @@ airtable:
   changes_table_id: ""
   # token -> config/settings.local.yaml, НЕ сюда
 
+digital_twin_api:
+  # Служба DT 7.1 (REST). Ключ «Аналитика» — в settings.local.yaml.
+  url: "https://127.0.0.1:8843/api/v1"
+  ca_cert: ""               # server.crt службы (Настройка → REST API → скачать сертификат)
+  cards_build: ""           # cards_build.py вьюера карточек базы DT; пусто — не пересобирать
+
 miri_logs:
   # Недельная выгрузка логов инкубатора. На черновом стенде её нет — оставьте пустым
   # и держите soft_steps.miri.enabled: false в settings.yaml.

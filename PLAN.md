@@ -119,7 +119,8 @@ early-warning-system/
 ## 3. Источник данных и триггер
 
 **Мастер-таблица** — Google Sheet «OPU table»
-(идентификатор листа — в `config/machine.local.yaml`, в репозиторий не входит). Подтверждённая схема листа: `Patient Full Name, DOB, ID, Husband…,
+(id листа — в `config/machine.local.yaml`, последнее
+изменение 2026-08-13). Подтверждённая схема листа: `Patient Full Name, DOB, ID, Husband…,
 cause of infertility, Date OPU, Date ET, BMI, AMH, FSH, E2, LG, P, # Attempt, Stimulation
 days, Start FSH dosage, LH stim, Sum stim dosage, Trigger…, Antral follicule count, OPU time,
 Age, N folicules OPU, OCC, MII, sperm, IVF/ICSI, Inseminated, 2pN, 3pN, 1pN, 0pN, Deg,

@@ -96,3 +96,10 @@ phi:
   - patient_id
   - patient_name
   - dob
+
+# Исключения из таблиц компетентности (обязательная секция, см. config/clinics/_template/columns.yaml).
+# Токены колонки fertilization_method для PERSONA ещё не сверены с выгрузкой: пустые списки
+# не исключают ничего. Заполнить по фактическим значениям колонки перед расчётом опорных параметров.
+competency_exclusion:
+  no_retrieval_tokens: []
+  freeze_all_tokens: []

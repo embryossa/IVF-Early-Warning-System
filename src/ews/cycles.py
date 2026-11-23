@@ -63,6 +63,37 @@ def _number(value: object) -> float | None:
         return None
 
 
+def numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
+    """Числовая колонка канонического кадра; отсутствующая — ряд пропусков.
+
+    Не то же самое, что `pd.to_numeric(frame.get(name))`, и разница дорогая.
+    `frame.get` на отсутствующей колонке отдаёт `None`, а `pd.to_numeric(None)`
+    возвращает СКАЛЯР `nan` вместо ряда — падает не он, а следующий по коду
+    `.fillna()` или `.isin()`, с сообщением про `numpy.float64`, в котором нет ни
+    имени колонки, ни намёка на причину.
+
+    Кадр без колонок — не выдумка: `load_from_teable` отдаёт ровно такой, когда в
+    таблице нет ни одной строки с `cycle_uid` (первый прогон новой клиники, пустое
+    зеркало, сорванная синхронизация). Прогон в этом случае обязан сказать «циклов
+    нет», а не упасть в чужом месте.
+    """
+    values = (frame[name] if name in frame.columns
+              else pd.Series(pd.NA, index=frame.index, dtype="object"))
+    return pd.to_numeric(values, errors="coerce")
+
+
+def datetime_column(frame: pd.DataFrame, name: str) -> pd.Series:
+    """Колонка дат канонического кадра; отсутствующая — ряд `NaT`.
+
+    Та же причина, что у `numeric_column`, и тот же класс отказа:
+    `pd.to_datetime(None)` даёт скаляр `NaT`, а сравнение скаляра с границей окна
+    возвращает `False` — и `frame.loc[False]` падает уже совсем не там, где ошибка.
+    """
+    values = (frame[name] if name in frame.columns
+              else pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]"))
+    return pd.to_datetime(values, errors="coerce")
+
+
 def assign_checkpoint(row: pd.Series, today: datetime,
                       closure_offset_days: int) -> str:
     """До какого чекпойнта дошёл цикл ПО ДАННЫМ, а не только по календарю.
@@ -139,10 +170,22 @@ def fr_denominator(frame: pd.DataFrame) -> pd.Series:
     не было, FR для цикла не определён, а не равен нулю. Без этого такие циклы шли в
     карту FR как полный провал оплодотворения.
     """
-    mii = pd.to_numeric(frame.get("mii"), errors="coerce")
-    inseminated = pd.to_numeric(frame.get("inseminated"), errors="coerce")
+    mii = numeric_column(frame, "mii")
+    inseminated = numeric_column(frame, "inseminated")
     denominator = mii.where(mii.notna() & mii.gt(0), inseminated)
     return denominator.mask(inseminated.eq(0))
+
+
+# Колонки, которых нет в зеркале Teable: их выводит из других полей загрузчик.
+# Кадр, собранный не загрузчиком (тесты, бэкфит), получает их на лету.
+DERIVED_COLUMNS = {"fr_denominator": fr_denominator}
+
+
+def derived_column(frame: pd.DataFrame, name: str) -> pd.Series:
+    """Колонка кадра; производная — посчитать, если загрузчик её не дописал."""
+    if name in frame.columns or name not in DERIVED_COLUMNS:
+        return numeric_column(frame, name)
+    return DERIVED_COLUMNS[name](frame)
 
 
 # Метрики: (числитель, знаменатель). Совпадают с embryo.kpi.KPI_SPECS, но здесь
@@ -168,6 +211,8 @@ def metric_counts(row: pd.Series, metric: str) -> tuple[float, float] | None:
     """
     numerator_col, denominator_col = METRIC_PARTS[metric]
     numerator, denominator = row.get(numerator_col), row.get(denominator_col)
+    if denominator is None and denominator_col in DERIVED_COLUMNS:
+        denominator = DERIVED_COLUMNS[denominator_col](row.to_frame().T).iloc[0]
     if numerator is None or denominator is None:
         return None
     if pd.isna(numerator) or pd.isna(denominator) or denominator <= 0:

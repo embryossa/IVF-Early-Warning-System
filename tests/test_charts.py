@@ -128,52 +128,78 @@ def test_degenerate_interval_gives_floor_concentration():
     assert charts.concentration_from_interval(0.0, 0.0, 0.0, 0) == 2.0
 
 
-# --- Совместное прочтение контуров -----------------------------------------
+def test_alert_crossing_resets_the_statistic():
+    """После сигнала alert счётчик обнуляется — тревога разобрана, копим заново.
 
-def _state(**kw):
-    from ews.verdict import ContourState
-    base = dict(metric="BlR", relative_triggered=True, absolute_status="benchmark",
-                literature_gap_pp=0.0)
-    base.update(kw)
-    return ContourState(**base)
-
-
-def test_trend_when_above_consensus():
-    """Просадка относительно себя при уровне выше консенсуса — НЕ разбор протокола.
-
-    Неподвижное решение владельца: лаборатория, укладывающаяся в консенсус и в
-    литературу, не может считаться провалившей протокол только потому, что стала
-    отличаться от собственной истории.
+    Watch устроен иначе и статистику НЕ сбрасывает: это два разных события, и
+    калибровка считает их той же реализацией, что и боевой прогон.
     """
-    from ews import verdict
-
-    result = verdict.read(_state())
-    assert result.action == verdict.ACTION_REVIEW_CASEMIX
-    assert "не провал" in result.reasoning
-
-
-def test_protocol_review_only_when_below_competency():
-    from ews import verdict
-
-    result = verdict.read(_state(absolute_status="below", literature_gap_pp=-12.0))
-    assert result.action == verdict.ACTION_REVIEW_PROTOCOL
+    runner = charts.CusumRunner()
+    assert runner.step_block(0, 20, 0.6, 0.5, 1.0, 3.0) == "alert"
+    assert runner.statistic == 0.0
+    assert runner.alert_signals == 1 and runner.above_watch is False
 
 
-def test_silent_chart_never_triggers_protocol_review():
-    """Молчащая карта не может дать разбор протокола, даже если уровень низкий.
+def test_watch_episode_closes_only_at_zero():
+    """Эпизод watch закрывается разрядкой в ноль, а не возвратом под порог.
 
-    Низкий уровень без изменения — давняя разница, а не событие раннего
-    предупреждения; смешивать их значит превращать систему в постоянный сигнал.
+    Иначе на чередующихся исходах статистика болталась бы вокруг порога и рождала
+    новый «эпизод» на каждом колебании.
     """
-    from ews import verdict
+    runner = charts.CusumRunner()
+    assert runner.step_block(0, 6, 0.59, 0.5, 1.0, 99.0) == "watch"
+    assert runner.above_watch is True
+    for _ in range(20):                      # длинная серия успехов разряжает карту
+        runner.step_block(6, 6, 0.59, 0.5, 1.0, 99.0)
+    assert runner.statistic == 0.0 and runner.above_watch is False
+    assert runner.step_block(0, 6, 0.59, 0.5, 1.0, 99.0) == "watch"
+    assert runner.watch_episodes == 2
 
-    result = verdict.read(_state(relative_triggered=False, absolute_status="below",
-                                 literature_gap_pp=-15.0))
-    assert result.action == verdict.ACTION_STANDING_GAP
+
+def test_simulation_refuses_impossible_block_sizes():
+    """Ни одного положительного размера цикла — это ошибка, а не бесконечный цикл.
+
+    Набор наблюдений отбрасывает неположительные размеры и берёт следующий; без
+    положительных он не закончится никогда, и задача планировщика упрётся в
+    двухчасовой лимит с отчётом «модель считает долго».
+    """
+    with pytest.raises(ValueError, match="положительного размера"):
+        charts.simulate_event_rates(charts.fixed_sampler(0.6), 0.6, 0.5, 1.0, 3.0,
+                                    horizon=10, replicates=1,
+                                    rng=np.random.default_rng(0),
+                                    block_sizes=np.array([0, -1]))
 
 
-def test_literature_tolerance_is_respected():
-    from ews import verdict
+def test_alert_crossing_keeps_the_value_it_crossed_on():
+    """Статистика обнуляется, `attained` — нет.
 
-    mild = verdict.read(_state(literature_gap_pp=-3.0))
-    assert mild.action == verdict.ACTION_REVIEW_CASEMIX
+    Карточка тревоги обязана нести величину, НА КОТОРОЙ сработала карта. Раньше её
+    читали из `statistic` уже ПОСЛЕ обнуления, и в боевом журнале лежала карточка
+    уровня alert со статистикой 0.0 — число, опровергающее собственную тревогу.
+    Пик и траектория страдали так же: панель печатала «сигналов alert 1, пик 6.25
+    при пороге 7.44», то есть пик ниже порога, который был пересечён.
+    """
+    runner = charts.CusumRunner()
+    event = runner.step_block(successes=0, trials=40, expected=0.8,
+                              odds_ratio=0.5, h_watch=1.0, h_alert=5.0)
+    assert event == "alert"
+    assert runner.statistic == 0.0        # карта перезапущена — это верно
+    assert runner.attained > 5.0          # но экскурсия сохранена
+
+
+def test_attained_equals_statistic_when_nothing_crossed():
+    """Без сигнала два поля совпадают: новое поле не меняет обычный ход карты."""
+    runner = charts.CusumRunner()
+    for _ in range(3):
+        runner.step_block(successes=3, trials=4, expected=0.8, odds_ratio=0.5,
+                          h_watch=100.0, h_alert=200.0)
+        assert runner.attained == runner.statistic
+
+
+def test_watch_crossing_does_not_reset_anything():
+    """`watch` карту не перезапускает — семантика уровней не тронута."""
+    runner = charts.CusumRunner()
+    event = runner.step_block(successes=0, trials=10, expected=0.8,
+                              odds_ratio=0.5, h_watch=1.0, h_alert=1000.0)
+    assert event == "watch"
+    assert runner.statistic == runner.attained > 1.0

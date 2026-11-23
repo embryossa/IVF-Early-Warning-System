@@ -32,6 +32,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .cycles import datetime_column, numeric_column
+
 # Модельная колонка в мастер-таблице — вероятность беременности на цикл.
 DIGITAL_TWIN = "digital_twin"    # L7 BEFE, итоговый ансамбль
 
@@ -72,11 +74,11 @@ def summarise(frame: pd.DataFrame, label: str = "когорта") -> OutcomeWind
     всем циклам, включая ещё не дошедшие до переноса, значит делить на популяцию,
     которой этот исход ещё не мог случиться.
     """
-    outcome = pd.to_numeric(frame.get("transfer_outcome"), errors="coerce")
+    outcome = numeric_column(frame, "transfer_outcome")
     known = outcome.isin([0, 1])
     n_known = int(known.sum())
 
-    digital_twin = pd.to_numeric(frame.get(DIGITAL_TWIN), errors="coerce")
+    digital_twin = numeric_column(frame, DIGITAL_TWIN)
 
     if n_known == 0:
         return OutcomeWindow(label, len(frame), 0, None, None, None, None,
@@ -104,7 +106,7 @@ def compare_periods(frame: pd.DataFrame, split: pd.Timestamp,
     начинается с первого дня данных: «до окна» у них пусто, и единственное осмысленное
     сравнение — окно против того, что было после него.
     """
-    dates = pd.to_datetime(frame.get("date_opu"), errors="coerce")
+    dates = datetime_column(frame, "date_opu")
     if end is None:
         return [summarise(frame.loc[dates < split], before),
                 summarise(frame.loc[dates >= split], after)]
