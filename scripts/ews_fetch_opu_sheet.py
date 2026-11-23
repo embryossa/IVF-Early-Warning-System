@@ -10,9 +10,12 @@
 сообщая «без изменений». Это ровно тот класс отказа, против которого написан
 preflight: шаг не падает, а тихо не делает ничего.
 
-Лист клиники «OPU table» публичный, поэтому берётся прямой CSV-экспорт Google
-Sheets — ни ключей, ни OAuth не требуется. Параметры листа (`sheet_id`, `gid`) —
-в `config/machine.local.yaml`, секция `google_sheet`.
+Доступ по ссылке у листа закрыт (2026-11-22). Лист скачивается rclone как CSV
+(экспортируется первый лист — Sheet1): сначала подключение сервисного аккаунта
+`gdrive_sa:` (сервисный аккаунт клиники, только чтение, бессрочный ключ), затем
+OAuth пользователя `gdrive:`; публичный CSV-экспорт — последний запасной путь.
+Параметры листа (`sheet_id`, `gid`, необязательно `rclone_remotes`, `rclone`) — в
+`config/machine.local.yaml`, секция `google_sheet`.
 
 Запись атомарная и с проверкой: файл заменяется только если ответ похож на CSV
 той же таблицы (есть колонки `ID` и `Date OPU`) и содержит хотя бы одну строку с
@@ -59,6 +62,40 @@ def looks_like_opu_export(text: str) -> tuple[bool, str]:
     return False, "нет ни одной строки с пациенткой"
 
 
+def _find_rclone(configured: str | None) -> str | None:
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+
+    if configured and Path(configured).exists():
+        return configured
+    found = shutil.which("rclone")
+    if found:
+        return found
+    root = Path(os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages"))
+    hits = sorted(root.glob("Rclone.Rclone_*/rclone-*/rclone.exe")) if root.is_dir() else []
+    return str(hits[-1]) if hits else None
+
+
+def fetch_via_rclone(sheet_id: str, remotes: list[str], configured: str | None) -> tuple[str | None, str]:
+    """CSV первого листа через rclone; (текст, источник) или (None, причина)."""
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    exe = _find_rclone(configured)
+    if not exe:
+        return None, "rclone не найден"
+    errors = []
+    for remote in remotes:
+        with tempfile.TemporaryDirectory() as tmp:
+            dst = Path(tmp) / "opu.csv"
+            r = subprocess.run([exe, "backend", "copyid", remote, sheet_id, str(dst),
+                                "--drive-export-formats", "csv"], capture_output=True, timeout=180)
+            if r.returncode == 0 and dst.exists() and dst.stat().st_size > 0:
+                return dst.read_text(encoding="utf-8-sig"), f"rclone {remote}"
+            errors.append(f"{remote}: код {r.returncode}")
+    return None, "; ".join(errors)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clinic", help="код профиля из config/clinics/")
@@ -80,22 +117,30 @@ def main() -> int:
         print("[!] machine.local.yaml: заполните google_sheet.sheet_id / gid / export_path")
         return 2
 
-    import requests  # noqa: PLC0415
-
-    url = EXPORT_URL.format(sheet_id=sheet_id, gid=gid)
     print(f"лист:   {sheet_id} (gid {gid})")
     print(f"приёмник: {target.relative_to(ROOT) if target.is_relative_to(ROOT) else target}")
 
-    try:
-        response = requests.get(url, timeout=90)
-        response.raise_for_status()
-    except Exception as exc:  # noqa: BLE001 — мягкий шаг
-        print(f"[warn] лист недоступен ({exc.__class__.__name__}: {exc}).")
-        print("       Прошлый экспорт оставлен как есть — синхронизация пойдёт по нему.")
-        return 0
+    remotes = section.get("rclone_remotes") or ["gdrive_sa:", "gdrive:"]
+    import os  # noqa: PLC0415
+    snap = os.environ.get("OPU_SNAPSHOT_DIR")      # единый снимок оркестратора клиники
+    if snap and (Path(snap) / "opu.csv").exists():
+        text, source = (Path(snap) / "opu.csv").read_text(encoding="utf-8-sig"), f"снимок {Path(snap).name}"
+    else:
+        text, source = fetch_via_rclone(sheet_id, remotes, section.get("rclone"))
+    if text is None:
+        import requests  # noqa: PLC0415
 
-    response.encoding = "utf-8"
-    text = response.text
+        try:
+            response = requests.get(EXPORT_URL.format(sheet_id=sheet_id, gid=gid), timeout=90)
+            response.raise_for_status()
+        except Exception as exc:  # noqa: BLE001 — мягкий шаг
+            print(f"[warn] лист недоступен ни через rclone ({source}), ни по ссылке "
+                  f"({exc.__class__.__name__}: {exc}).")
+            print("       Прошлый экспорт оставлен как есть — синхронизация пойдёт по нему.")
+            return 0
+        response.encoding = "utf-8"
+        text, source = response.text, "публичная ссылка"
+    print(f"источник: {source}")
     valid, reason = looks_like_opu_export(text)
     if not valid:
         print(f"[warn] ответ не принят: {reason}")

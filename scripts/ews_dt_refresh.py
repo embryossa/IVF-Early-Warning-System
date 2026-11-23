@@ -165,6 +165,69 @@ def rebuild_viewer(cfg, clinic) -> None:
     print(f"вьюер карточек: {summary[-1]}")
 
 
+def _portal_values(fields: dict) -> tuple[dict, list[str]] | None:
+    """Строка «DT — прогнозы» службы портала -> (values в формате analytics, флаги подстановок)."""
+    try:
+        inp = json.loads(fields.get("Входные данные") or "{}")
+        full = json.loads(fields.get("Полный результат") or "null") or {}
+    except ValueError:
+        return None
+    flags = [f"{name}_imputed" for name in (inp.get("imputed") or [])] + \
+            [f"{name}_manual" for name in (inp.get("manual") or [])]
+    if str(fields.get("Режим") or "").startswith("Авто"):
+        return (full, flags) if full.get("clinical_probability") is not None or full.get("cycle_probability") is not None \
+            else None
+    # клинический: служба отдаёт prediction другого вида — переносим итоговые поля
+    def pct(v):
+        return None if v is None else float(v) / 100
+    values = {"clinical_probability": pct(fields.get("На перенос, %")),
+              "clinical_probability_kind": fields.get("Вид вероятности"),
+              "befe_ci_low": pct(fields.get("Диапазон от, %")), "befe_ci_high": pct(fields.get("Диапазон до, %")),
+              "cycle_probability": pct(fields.get("За цикл, %")),
+              "befe_reliability": fields.get("Надёжность"), "befe_reliability_band": fields.get("Полоса надёжности"),
+              "ood_final": bool(fields.get("Вне обучающих данных"))}
+    return values, flags + ["clinician_reviewed"]
+
+
+def import_from_portal(cfg, clinic, client, tables: dict, targets: list, state: dict, settings: dict,
+                       offset: float, portal_table: str, dry_run: bool) -> int:
+    """Единый авто-расчёт DT клиники — служба портала. EWS не считает сам, а переносит её
+    готовые результаты в базу DT для тех же целей, что выбрал бы сам (`select`): без прогноза
+    или с новым этапом. Прогнозы пайплайна без изменения входов не трогаются."""
+    best: dict[str, dict] = {}
+    for record in client.all_records(portal_table):
+        f = record["fields"]
+        if f.get("Статус") != "готово":
+            continue
+        key = (dt_refresh._text(f.get("_key")) or "").upper().replace(" ", "")
+        clinical = not str(f.get("Режим") or "").startswith("Авто")
+        if key and (key not in best or clinical):
+            best[key] = f
+    rows, by_uid, waiting = [], {}, 0
+    for t in targets:
+        f = best.get(t.key)
+        got = _portal_values(f) if f else None
+        if not got:
+            waiting += 1
+            continue
+        values, flags = got
+        t.snapshot.flags = flags or ["нет"]
+        t.reason = "портал: " + ("клинический (проверен врачом)" if "clinician_reviewed" in flags else "авто-расчёт")
+        rows.append({"cycle_id": t.uid, "status": "complete", "values": values})
+        by_uid[t.uid] = {"target": t, "fingerprint": t.snapshot.fingerprint}
+    print(f"из службы портала: к переносу {len(rows)}, ждут расчёта портала {waiting}")
+    if dry_run or not rows:
+        return 0
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    results = {"id": f"portal-{stamp}", "finished": datetime.utcnow().isoformat() + "Z", "rows": rows,
+               "model_fingerprint": next((r["values"].get("model_fingerprint") for r in rows
+                                          if r["values"].get("model_fingerprint")), "")}
+    dt_refresh.SOURCE_LABEL = "IVF DT 7.1 REST analytics (служба портала Two-Line)"
+    summary = write_results(cfg, clinic, client, tables, results, by_uid, state, settings, offset)
+    print(f"перенесено в базу DT: {summary}")
+    return len(rows)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clinic", help="код профиля из config/clinics/")
@@ -191,6 +254,34 @@ def main() -> int:
         return 2
     offset = float(cfg.settings["sync"]["dt_teable"]["date_utc_offset_hours"])
     rules = dt_refresh.Rules.from_profile(clinic.profile, clinic.columns)
+
+    # Единый авто-расчёт клиники — служба портала (machine.local.yaml, секция dt_portal):
+    # EWS не считает сам, а переносит её готовые результаты; служба DT здесь не нужна.
+    portal = cfg.machine.get("dt_portal") if isinstance(cfg.machine.get("dt_portal"), dict) else None
+    portal_table = str((portal or {}).get("table_id") or "").strip()
+    if portal_table:
+        client = teable_client.connect(cfg, dry_run=args.dry_run)
+        tables = teable_client.resolve_tables(cfg, client, dt_base)
+        state_path = _state_path(cfg, clinic)
+        state = _load_state(state_path)
+        state.setdefault("scored", {})
+        mirror = [r["fields"] for r in client.all_records(
+            teable_cfg["opu_table_id"], projection=dt_refresh.MIRROR_FIELDS)]
+        dt_rows = {}
+        for record in client.all_records(dt_cycles):
+            key = (dt_refresh._text(record["fields"].get("ID пациента")) or "").upper().replace(" ", "")
+            if key:
+                dt_rows[key] = record
+        targets, counts = dt_refresh.select(mirror, dt_rows, state, rules, offset)
+        print("источник DT: служба портала (dt_portal)")
+        print("циклы: " + " · ".join(f"{k} {v}" for k, v in counts.items() if v))
+        moved = import_from_portal(cfg, clinic, client, tables, targets, state, settings, offset,
+                                   portal_table, args.dry_run)
+        if not args.dry_run:
+            _save_state(state_path, state)
+            if moved:
+                rebuild_viewer(cfg, clinic)
+        return 0
 
     try:
         api = dt_refresh.connect_api(cfg)
